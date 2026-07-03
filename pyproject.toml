@@ -1,0 +1,8 @@
+[project]
+name = "lpr"
+version = "0.1.0"
+description = "Local review tool for coding-agent changes."
+requires-python = ">=3.11"
+
+[project.scripts]
+lpr = "lpr.cli:main"
