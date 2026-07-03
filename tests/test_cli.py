@@ -14,6 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DummyCurses:
+    KEY_ENTER = 10
+    KEY_UP = 259
+    KEY_DOWN = 258
+
     def curs_set(self, visible):
         self.cursor_visible = visible
 
@@ -129,6 +133,69 @@ class CliTest(unittest.TestCase):
             self.assertEqual(app.diff_progress_label(), f'{round((app.diff_line + 1) * 100 / line_count)}%')
             app.diff_line = line_count - 1
             self.assertEqual(app.diff_progress_label(), 'Bot')
+
+    def test_tui_comment_modal_lists_open_and_superseded_comments(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+
+            app.open_comment_modal()
+
+            self.assertEqual(app.mode, 'comments')
+            self.assertEqual(app.modal_comment_ids, ('LPR-001', 'LPR-002', 'LPR-003'))
+
+    def test_tui_comment_modal_state_changes_stay_visible_until_close(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            app.open_comment_modal()
+
+            app.transition_selected_modal_comment('resolved')
+
+            self.assertEqual(app.modal_comment_ids, ('LPR-001', 'LPR-002', 'LPR-003'))
+            self.assertEqual(app.modal_comments()[0].state, 'resolved')
+            self.assertEqual(load_state(repo).comments[0].state, 'resolved')
+
+            app.close_comment_modal()
+            app.open_comment_modal()
+
+            self.assertEqual(app.modal_comment_ids, ('LPR-002', 'LPR-003'))
+
+    def test_tui_comment_modal_state_keys_toggle_to_original_state(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            app.open_comment_modal()
+
+            app.transition_selected_modal_comment('resolved')
+            self.assertEqual(app.modal_comments()[0].state, 'resolved')
+
+            app.transition_selected_modal_comment('resolved')
+            self.assertEqual(app.modal_comments()[0].state, 'open')
+            self.assertEqual(load_state(repo).comments[0].state, 'open')
+
+            app.transition_selected_modal_comment('dismissed')
+            self.assertEqual(app.modal_comments()[0].state, 'dismissed')
+
+            app.transition_selected_modal_comment('dismissed')
+            self.assertEqual(app.modal_comments()[0].state, 'open')
+
+    def test_tui_comment_modal_jump_selects_comment_location(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            app.open_comment_modal()
+            app.modal_index = 2
+
+            app.jump_to_modal_comment()
+
+            self.assertEqual(app.focus, 'diff')
+            self.assertEqual(app.files[app.selected].path, 'src/receipts.py')
+            self.assertEqual(app.selected_file_rows()[app.diff_line].comment_id, 'LPR-003')
 
     def test_tui_file_focus_still_moves_between_files(self):
         with tempfile.TemporaryDirectory() as temp:

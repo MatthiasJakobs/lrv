@@ -72,6 +72,10 @@ def save_state(repo, state):
     path.write_text(json.dumps(state_to_data(state), indent=2) + '\n')
 
 
+def utc_now():
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+
+
 def state_to_data(state):
     return {
         'version': state.version,
@@ -106,7 +110,7 @@ def comment_to_data(comment):
 
 
 def append_comment(state, file, side, line, hunk, body, placement='after'):
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+    now = utc_now()
     comment = Comment(
         id=next_comment_id(state.comments),
         state='open',
@@ -133,6 +137,39 @@ def remove_comment(state, comment_id):
         repo_root=state.repo_root,
         base_commit=state.base_commit,
         comments=tuple(comment for comment in state.comments if comment.id != comment_id),
+    )
+
+
+def set_comment_state(state, comment_id, comment_state):
+    comments = []
+    changed = False
+    now = utc_now()
+    for comment in state.comments:
+        if comment.id != comment_id:
+            comments.append(comment)
+            continue
+        changed = True
+        comments.append(
+            Comment(
+                id=comment.id,
+                state=comment_state,
+                file=comment.file,
+                side=comment.side,
+                line_range=comment.line_range,
+                hunk=comment.hunk,
+                body=comment.body,
+                created_at=comment.created_at,
+                updated_at=now,
+                placement=comment.placement,
+            )
+        )
+    if not changed:
+        return state
+    return ReviewState(
+        version=state.version,
+        repo_root=state.repo_root,
+        base_commit=state.base_commit,
+        comments=tuple(comments),
     )
 
 

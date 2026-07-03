@@ -3,7 +3,7 @@ import re
 import sys
 
 from lpr.git import changed_files, file_diff, head_revision
-from lpr.state import HunkSnapshot, ReviewState, append_comment, load_state, remove_comment, save_state
+from lpr.state import HunkSnapshot, ReviewState, append_comment, load_state, remove_comment, save_state, set_comment_state
 
 
 HUNK_RE = re.compile(r'^@@ -(?P<old_start>\d+)(?:,\d+)? \+(?P<new_start>\d+)(?:,\d+)? @@')
@@ -192,6 +192,10 @@ class ReviewApp:
         self.input_anchor = None
         self.input_placement = 'after'
         self.visible_diff_height = 10
+        self.modal_comment_ids = ()
+        self.modal_original_states = {}
+        self.modal_index = 0
+        self.modal_scroll = 0
         self.reload()
 
     def reload(self):
@@ -215,6 +219,9 @@ class ReviewApp:
             if self.mode == 'input':
                 self.handle_input_key(key, curses)
                 continue
+            if self.mode == 'comments':
+                self.handle_modal_key(key, curses)
+                continue
             if key in (ord('q'), 27):
                 return
             if key in (ord('r'),):
@@ -227,8 +234,10 @@ class ReviewApp:
                 self.move_down()
             elif key in (curses.KEY_PPAGE, ord('b')):
                 self.page_diff(-10)
-            elif key in (curses.KEY_NPAGE, ord('f'), ord(' ')):
+            elif key in (curses.KEY_NPAGE, ord('f')):
                 self.page_diff(10)
+            elif key == ord(' '):
+                self.open_comment_modal()
             elif key == CTRL_D:
                 self.half_page_diff(1)
             elif key == CTRL_U:
@@ -313,6 +322,92 @@ class ReviewApp:
         if not self.files:
             return []
         return rows_for_file(self.repo, self.state, self.files[self.selected])
+
+    def open_comment_modal(self):
+        ids = [
+            comment.id
+            for comment in sorted(self.state.comments, key=lambda item: item.id)
+            if comment.state in ('open', 'superseded')
+        ]
+        self.modal_comment_ids = tuple(ids)
+        self.modal_original_states = {comment.id: comment.state for comment in self.state.comments if comment.id in ids}
+        self.modal_index = 0
+        self.modal_scroll = 0
+        self.mode = 'comments'
+
+    def close_comment_modal(self):
+        self.mode = 'normal'
+        self.modal_comment_ids = ()
+        self.modal_original_states = {}
+        self.modal_index = 0
+        self.modal_scroll = 0
+
+    def modal_comments(self):
+        by_id = {comment.id: comment for comment in self.state.comments}
+        return [by_id[id] for id in self.modal_comment_ids if id in by_id]
+
+    def selected_modal_comment(self):
+        comments = self.modal_comments()
+        if not comments:
+            return None
+        self.modal_index = max(0, min(len(comments) - 1, self.modal_index))
+        return comments[self.modal_index]
+
+    def move_modal_selection(self, delta):
+        comments = self.modal_comments()
+        if not comments:
+            self.modal_index = 0
+            return
+        self.modal_index = max(0, min(len(comments) - 1, self.modal_index + delta))
+
+    def handle_modal_key(self, key, curses):
+        if key in (27, ord('q')):
+            self.close_comment_modal()
+        elif key in (curses.KEY_UP, ord('k')):
+            self.move_modal_selection(-1)
+        elif key in (curses.KEY_DOWN, ord('j')):
+            self.move_modal_selection(1)
+        elif key in (curses.KEY_ENTER, ord('\n'), ord('\r')):
+            self.jump_to_modal_comment()
+            self.close_comment_modal()
+        elif key == ord('r'):
+            self.transition_selected_modal_comment('resolved')
+        elif key == ord('x'):
+            self.transition_selected_modal_comment('dismissed')
+
+    def transition_selected_modal_comment(self, comment_state):
+        comment = self.selected_modal_comment()
+        if comment is None:
+            return
+        original_state = self.modal_original_states.get(comment.id, comment.state)
+        next_state = original_state if comment.state == comment_state else comment_state
+        self.state = set_comment_state(self.state, comment.id, next_state)
+        save_state(self.repo, self.state)
+
+    def jump_to_modal_comment(self):
+        comment = self.selected_modal_comment()
+        if comment is None:
+            return
+        for index, file in enumerate(self.files):
+            if file.path == comment.file:
+                self.selected = index
+                self.focus = 'diff'
+                self.diff_line = self.comment_row_index(comment)
+                return
+
+    def comment_row_index(self, comment):
+        rows = rows_for_file(self.repo, self.state, self.files[self.selected])
+        for index, row in enumerate(rows):
+            if row.comment_id == comment.id:
+                return index
+        for index, row in enumerate(rows):
+            if row.anchor is None:
+                continue
+            old_line = row.anchor.line if row.anchor.side == 'old' else None
+            new_line = row.anchor.line if row.anchor.side == 'new' else None
+            if comment_matches_line(comment, old_line, new_line):
+                return index
+        return 0
 
     def start_input(self, direction, curses):
         if not self.files:
@@ -425,11 +520,16 @@ class ReviewApp:
         self.draw_sidebar(screen, height, sidebar_width, curses)
         self.draw_main(screen, height, width, main_x, curses)
         self.draw_input(screen, height, width, curses)
+        self.draw_comment_modal(screen, height, width, curses)
         screen.refresh()
 
     def draw_header(self, screen, width, curses):
-        mode = 'INPUT' if self.mode == 'input' else 'NORMAL'
-        title = f'lpr review  {mode}  HEAD {self.state.base_commit or head_revision(self.repo)}  tab focus  o/O comment  d delete  q quit  r refresh'
+        labels = {
+            'input': 'INPUT',
+            'comments': 'COMMENTS',
+        }
+        mode = labels.get(self.mode, 'NORMAL')
+        title = f'lpr review  {mode}  HEAD {self.state.base_commit or head_revision(self.repo)}  tab focus  space comments  o/O comment  d delete  q quit  r refresh'
         attr = curses.color_pair(7) if self.mode == 'input' else curses.color_pair(6)
         if attr == 0:
             attr = curses.A_REVERSE
@@ -485,6 +585,61 @@ class ReviewApp:
             screen.move(height - 1, min(width - 2, len(prompt)))
         except Exception:
             pass
+
+    def draw_comment_modal(self, screen, height, width, curses):
+        if self.mode != 'comments':
+            return
+        modal_height = min(max(7, height - 4), 18)
+        modal_width = min(max(50, width - 8), 88)
+        y = max(1, (height - modal_height) // 2)
+        x = max(0, (width - modal_width) // 2)
+        bottom = y + modal_height - 1
+        right = x + modal_width - 1
+
+        title = 'Comments  enter jump  r resolve  x dismiss  esc close'
+        self.addstr(screen, y, x, '+' + '-' * (modal_width - 2) + '+', curses.A_BOLD)
+        self.addstr(screen, y + 1, x, '|', curses.A_BOLD)
+        self.addstr(screen, y + 1, x + 2, title[:modal_width - 4], curses.A_BOLD)
+        self.addstr(screen, y + 1, right, '|', curses.A_BOLD)
+        self.addstr(screen, y + 2, x, '+' + '-' * (modal_width - 2) + '+', curses.A_BOLD)
+
+        comments = self.modal_comments()
+        visible_height = max(0, modal_height - 4)
+        if self.modal_index < self.modal_scroll:
+            self.modal_scroll = self.modal_index
+        elif self.modal_index >= self.modal_scroll + visible_height:
+            self.modal_scroll = self.modal_index - visible_height + 1
+        self.modal_scroll = max(0, self.modal_scroll)
+        visible = comments[self.modal_scroll:self.modal_scroll + visible_height]
+
+        for offset in range(visible_height):
+            row_y = y + 3 + offset
+            self.addstr(screen, row_y, x, '|')
+            self.addstr(screen, row_y, right, '|')
+            self.addstr(screen, row_y, x + 1, ' ' * max(0, modal_width - 2))
+
+        if not comments:
+            self.addstr(screen, y + 3, x + 2, 'No open or superseded comments.')
+        for offset, comment in enumerate(visible):
+            index = self.modal_scroll + offset
+            label = f'{comment.id} [{comment.state}] {comment.location()}  {comment.body.splitlines()[0]}'
+            attr = self.modal_comment_attr(curses, comment)
+            if index == self.modal_index:
+                attr |= curses.A_REVERSE
+            self.addstr(screen, y + 3 + offset, x + 2, label[:modal_width - 4], attr)
+
+        self.addstr(screen, bottom, x, '+' + '-' * (modal_width - 2) + '+', curses.A_BOLD)
+
+    def modal_comment_attr(self, curses, comment):
+        if comment.state == 'open':
+            return curses.color_pair(5) | curses.A_BOLD
+        if comment.state == 'superseded':
+            return curses.color_pair(4)
+        if comment.state == 'resolved':
+            return curses.color_pair(2)
+        if comment.state == 'dismissed':
+            return curses.color_pair(3)
+        return curses.A_NORMAL
 
     def line_attr(self, curses, line):
         if line.startswith('>>>'):
