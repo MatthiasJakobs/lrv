@@ -296,6 +296,16 @@ class ReviewApp:
         amount = max(1, self.visible_diff_height // 2)
         self.move_diff_line(amount * direction)
 
+    def diff_progress_label(self):
+        lines = self.selected_file_lines()
+        if not lines:
+            return '0%'
+        if self.diff_line <= 0:
+            return 'Top'
+        if self.diff_line >= len(lines) - 1:
+            return 'Bot'
+        return f'{round((self.diff_line + 1) * 100 / len(lines))}%'
+
     def selected_file_lines(self):
         return [row.text for row in self.selected_file_rows()]
 
@@ -461,6 +471,9 @@ class ReviewApp:
             if self.focus == 'diff' and self.scroll + index == self.diff_line:
                 attr |= curses.A_REVERSE
             self.addstr(screen, index + 4, x, line[:width - x - 1], attr)
+
+        progress = self.diff_progress_label()
+        self.addstr(screen, height - 1, max(x, width - len(progress) - 1), progress, curses.A_BOLD)
 
     def draw_input(self, screen, height, width, curses):
         if self.mode != 'input' or height <= 1:

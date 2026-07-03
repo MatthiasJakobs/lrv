@@ -116,6 +116,20 @@ class CliTest(unittest.TestCase):
             self.assertEqual(app.selected, 1)
             self.assertEqual(app.diff_line, 3)
 
+    def test_tui_diff_progress_label_matches_selected_line(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            line_count = len(app.selected_file_lines())
+
+            app.diff_line = 0
+            self.assertEqual(app.diff_progress_label(), 'Top')
+            app.diff_line = line_count // 2
+            self.assertEqual(app.diff_progress_label(), f'{round((app.diff_line + 1) * 100 / line_count)}%')
+            app.diff_line = line_count - 1
+            self.assertEqual(app.diff_progress_label(), 'Bot')
+
     def test_tui_file_focus_still_moves_between_files(self):
         with tempfile.TemporaryDirectory() as temp:
             repo = Path(temp) / 'repo'
