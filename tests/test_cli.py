@@ -13,6 +13,11 @@ from lpr.tui import ReviewApp
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class DummyCurses:
+    def curs_set(self, visible):
+        self.cursor_visible = visible
+
+
 class CliTest(unittest.TestCase):
     def run_lpr(self, repo, *args):
         env = os.environ.copy()
@@ -91,6 +96,144 @@ class CliTest(unittest.TestCase):
             app.move_down()
             self.assertEqual(app.selected, 1)
             self.assertEqual(app.diff_line, 0)
+
+    def test_tui_insert_mode_saves_comment_on_selected_diff_line(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            app.selected = 2
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = next(index for index, row in enumerate(rows) if row.text == '+        return 1')
+
+            app.start_input(1, DummyCurses())
+            self.assertEqual(app.mode, 'input')
+            app.input_text = 'Keep rejecting invalid quantities.'
+            app.save_input(DummyCurses())
+
+            state = load_state(repo)
+            comment = state.comments[-1]
+            self.assertEqual(comment.id, 'LPR-003')
+            self.assertEqual(comment.state, 'open')
+            self.assertEqual(comment.file, 'src/parser.py')
+            self.assertEqual(comment.side, 'new')
+            self.assertEqual(comment.line_range.start, 7)
+            self.assertEqual(comment.body, 'Keep rejecting invalid quantities.')
+            self.assertEqual(comment.placement, 'after')
+            self.assertEqual(comment.hunk.header, '@@ -4,7 +4,7 @@ from __future__ import annotations')
+            self.assertIn('+        return 1', comment.hunk.snapshot)
+
+    def test_tui_o_and_O_insert_below_and_above_current_line(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            app.selected = 2
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = next(index for index, row in enumerate(rows) if row.text == '+        return 1')
+
+            app.start_input(1, DummyCurses())
+            self.assertEqual(rows[app.diff_line].text, '+        return 1')
+            app.cancel_input(DummyCurses())
+            app.diff_line = next(index for index, row in enumerate(rows) if row.text == '+        return 1')
+
+            app.start_input(-1, DummyCurses())
+            self.assertEqual(rows[app.diff_line].text, '+        return 1')
+            self.assertEqual(app.input_placement, 'before')
+
+    def test_tui_o_and_O_on_total_line_place_comment_below_and_above(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            app.selected = 0
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = next(index for index, row in enumerate(rows) if row.text == '     total = 0.0')
+
+            app.start_input(1, DummyCurses())
+            self.assertEqual(rows[app.diff_line].text, '     total = 0.0')
+            self.assertEqual(app.input_placement, 'after')
+            app.cancel_input(DummyCurses())
+            app.diff_line = next(index for index, row in enumerate(rows) if row.text == '     total = 0.0')
+
+            app.start_input(-1, DummyCurses())
+            self.assertEqual(rows[app.diff_line].text, '     total = 0.0')
+            self.assertEqual(app.input_placement, 'before')
+
+    def test_tui_O_renders_saved_comment_above_current_line(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            app.selected = 0
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = next(index for index, row in enumerate(rows) if row.text == '     total = 0.0')
+
+            app.start_input(-1, DummyCurses())
+            app.input_text = 'Initialize this closer to use.'
+            app.save_input(DummyCurses())
+
+            lines = app.selected_file_lines()
+            comment_index = next(index for index, line in enumerate(lines) if line == '>>> Initialize this closer to use.')
+            target_index = next(index for index, line in enumerate(lines) if line == '     total = 0.0')
+            self.assertLess(comment_index, target_index)
+
+    def test_tui_o_renders_saved_comment_below_current_line(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            app.selected = 0
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = next(index for index, row in enumerate(rows) if row.text == '     total = 0.0')
+
+            app.start_input(1, DummyCurses())
+            app.input_text = 'This accumulator is visible.'
+            app.save_input(DummyCurses())
+
+            lines = app.selected_file_lines()
+            comment_index = next(index for index, line in enumerate(lines) if line == '>>> This accumulator is visible.')
+            target_index = next(index for index, line in enumerate(lines) if line == '     total = 0.0')
+            self.assertGreater(comment_index, target_index)
+
+    def test_tui_o_and_O_can_insert_at_bottom_and_top_of_changes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            app.selected = 2
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+
+            app.diff_line = 0
+            app.start_input(-1, DummyCurses())
+            self.assertEqual(rows[app.diff_line].text, ' def parse_quantity(raw: str) -> int:')
+            app.cancel_input(DummyCurses())
+
+            app.diff_line = len(rows) - 1
+            app.start_input(1, DummyCurses())
+            self.assertEqual(rows[app.diff_line].text, '     return value')
+
+    def test_tui_d_deletes_selected_inline_comment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            app.selected = 2
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = next(index for index, row in enumerate(rows) if row.text.startswith('>>> LPR-001 '))
+
+            app.delete_selected_comment()
+
+            state = load_state(repo)
+            self.assertNotIn('LPR-001', [comment.id for comment in state.comments])
+            self.assertIn('LPR-002', [comment.id for comment in state.comments])
 
     def test_export_prints_only_open_comments(self):
         with tempfile.TemporaryDirectory() as temp:
