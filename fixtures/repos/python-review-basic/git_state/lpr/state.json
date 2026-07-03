@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "repo": {
+    "root": "__REPO_ROOT__",
+    "baseCommit": "__HEAD__"
+  },
+  "comments": [
+    {
+      "id": "LPR-001",
+      "state": "open",
+      "file": "src/parser.py",
+      "side": "new",
+      "lineRange": {
+        "start": 6,
+        "end": 6
+      },
+      "hunk": {
+        "header": "@@ -2,9 +2,9 @@",
+        "hash": "sha256:fixture-open-parser",
+        "snapshot": "@@ -2,9 +2,9 @@\n \n def parse_quantity(raw: str) -> int:\n     value = int(raw)\n     if value < 1:\n-        raise ValueError(\"quantity must be positive\")\n+        return 1\n     return value"
+      },
+      "body": "This silently changes invalid input instead of rejecting it.",
+      "createdAt": "2026-07-04T10:00:00Z",
+      "updatedAt": "2026-07-04T10:00:00Z"
+    },
+    {
+      "id": "LPR-002",
+      "state": "superseded",
+      "file": "src/calculator.py",
+      "side": "new",
+      "lineRange": {
+        "start": 12,
+        "end": 12
+      },
+      "hunk": {
+        "header": "@@ -9,8 +9,5 @@",
+        "hash": "sha256:fixture-superseded-discount",
+        "snapshot": "@@ -9,8 +9,5 @@\n \n def apply_discount(total: float, percent: float) -> float:\n-    if percent <= 0:\n-        return total\n     return total - (total * percent / 100)"
+      },
+      "body": "Negative discounts should not increase the total.",
+      "createdAt": "2026-07-04T10:05:00Z",
+      "updatedAt": "2026-07-04T10:15:00Z"
+    }
+  ]
+}
