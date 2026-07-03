@@ -1,3 +1,4 @@
+import difflib
 import subprocess
 from pathlib import Path
 
@@ -37,6 +38,23 @@ def changed_files(repo):
     files.extend(ChangedFile(path=path, status='??') for path in untracked if path)
 
     return sorted(files, key=lambda item: item.path)
+
+
+def file_diff(repo, file):
+    if file.status == '??':
+        return untracked_file_diff(repo, file.path)
+    return run_git(repo, 'diff', '--', file.path)
+
+
+def untracked_file_diff(repo, path):
+    full_path = repo / path
+    try:
+        lines = full_path.read_text().splitlines()
+    except UnicodeDecodeError:
+        return f'diff --git a/{path} b/{path}\nnew file mode 100644\nBinary file {path} differs'
+
+    diff = difflib.unified_diff([], lines, fromfile='/dev/null', tofile=f'b/{path}', lineterm='')
+    return '\n'.join(diff)
 
 
 def parse_name_status(line):

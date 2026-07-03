@@ -5,6 +5,7 @@ from pathlib import Path
 from lpr.export import render_export, render_single_comment
 from lpr.git import GitError, changed_files, head_revision, repo_root
 from lpr.state import StateError, comments_by_state, load_state
+from lpr.tui import run_tui
 
 
 def main(argv=None):
@@ -25,7 +26,8 @@ def main(argv=None):
 def build_parser():
     parser = argparse.ArgumentParser(prog='lpr')
     parser.add_argument('-C', '--repo', type=Path, help='Repository path. Defaults to the current directory.')
-    subcommands = parser.add_subparsers(dest='command', required=True)
+    parser.set_defaults(handler=command_tui)
+    subcommands = parser.add_subparsers(dest='command')
 
     status = subcommands.add_parser('status', help='Show changed files and review comment counts.')
     status.add_argument('path', nargs='?', type=Path, help='Repository path. Defaults to the current directory.')
@@ -74,6 +76,11 @@ def command_status(repo, state, args):
         ids = ', '.join(comment.id for comment in comments) or '-'
         print(f'  {name}: {len(comments)} ({ids})')
     return 0
+
+
+def command_tui(repo, state, args):
+    del args
+    return run_tui(repo, state)
 
 
 def command_export(repo, state, args):
