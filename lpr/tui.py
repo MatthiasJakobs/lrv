@@ -7,6 +7,8 @@ from lpr.state import HunkSnapshot, ReviewState, append_comment, load_state, rem
 
 
 HUNK_RE = re.compile(r'^@@ -(?P<old_start>\d+)(?:,\d+)? \+(?P<new_start>\d+)(?:,\d+)? @@')
+CTRL_D = 4
+CTRL_U = 21
 
 
 def run_tui(repo, state):
@@ -189,6 +191,7 @@ class ReviewApp:
         self.input_text = ''
         self.input_anchor = None
         self.input_placement = 'after'
+        self.visible_diff_height = 10
         self.reload()
 
     def reload(self):
@@ -226,6 +229,10 @@ class ReviewApp:
                 self.page_diff(-10)
             elif key in (curses.KEY_NPAGE, ord('f'), ord(' ')):
                 self.page_diff(10)
+            elif key == CTRL_D:
+                self.half_page_diff(1)
+            elif key == CTRL_U:
+                self.half_page_diff(-1)
             elif key in (curses.KEY_LEFT, ord('h')):
                 self.focus = 'files'
             elif key in (curses.KEY_RIGHT, ord('l')):
@@ -282,6 +289,12 @@ class ReviewApp:
         if self.focus == 'files':
             self.focus = 'diff'
         self.move_diff_line(delta)
+
+    def half_page_diff(self, direction):
+        if self.focus != 'diff':
+            return
+        amount = max(1, self.visible_diff_height // 2)
+        self.move_diff_line(amount * direction)
 
     def selected_file_lines(self):
         return [row.text for row in self.selected_file_rows()]
@@ -439,6 +452,7 @@ class ReviewApp:
         visible_height = max(0, height - 5)
         if self.mode == 'input':
             visible_height = max(0, visible_height - 1)
+        self.visible_diff_height = visible_height
         self.clamp_scroll(visible_height)
         visible = lines[self.scroll:self.scroll + visible_height]
 

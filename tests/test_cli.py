@@ -88,6 +88,34 @@ class CliTest(unittest.TestCase):
             app.move_up()
             self.assertEqual(app.diff_line, 1)
 
+    def test_tui_ctrl_d_and_ctrl_u_half_page_in_diff_focus(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+
+            app.focus = 'diff'
+            app.visible_diff_height = 12
+            app.half_page_diff(1)
+            self.assertEqual(app.diff_line, 6)
+            app.half_page_diff(-1)
+            self.assertEqual(app.diff_line, 0)
+
+    def test_tui_ctrl_d_and_ctrl_u_ignore_file_focus(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+
+            app.focus = 'files'
+            app.selected = 1
+            app.diff_line = 3
+            app.visible_diff_height = 12
+            app.half_page_diff(1)
+            self.assertEqual(app.focus, 'files')
+            self.assertEqual(app.selected, 1)
+            self.assertEqual(app.diff_line, 3)
+
     def test_tui_file_focus_still_moves_between_files(self):
         with tempfile.TemporaryDirectory() as temp:
             repo = Path(temp) / 'repo'
