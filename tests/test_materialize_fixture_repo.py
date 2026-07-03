@@ -20,11 +20,11 @@ class MaterializeFixtureRepoTest(unittest.TestCase):
 
             self.assertEqual(
                 self.run_git(repo, 'diff', '--name-only').splitlines(),
-                ['src/calculator.py', 'src/parser.py'],
+                ['src/calculator.py', 'src/parser.py', 'src/receipts.py', 'src/taxes.py'],
             )
             self.assertEqual(
                 self.run_git(repo, 'ls-files', '--others', '--exclude-standard').splitlines(),
-                ['src/formatters.py'],
+                ['src/formatters.py', 'src/reports.py'],
             )
 
     def test_writes_mock_lpr_state_inside_git_directory(self):
@@ -37,9 +37,11 @@ class MaterializeFixtureRepoTest(unittest.TestCase):
             self.assertEqual(state['version'], 1)
             self.assertEqual(state['repo']['root'], str(repo))
             self.assertEqual(state['repo']['baseCommit'], self.run_git(repo, 'rev-parse', 'HEAD'))
-            self.assertEqual([comment['id'] for comment in state['comments']], ['LPR-001', 'LPR-002'])
+            self.assertEqual([comment['id'] for comment in state['comments']], ['LPR-001', 'LPR-002', 'LPR-003', 'LPR-004'])
             self.assertEqual(state['comments'][0]['state'], 'open')
             self.assertEqual(state['comments'][1]['state'], 'superseded')
+            self.assertEqual(state['comments'][2]['state'], 'open')
+            self.assertEqual(state['comments'][3]['state'], 'dismissed')
 
     def test_refuses_to_write_into_non_empty_destination(self):
         with tempfile.TemporaryDirectory() as temp:

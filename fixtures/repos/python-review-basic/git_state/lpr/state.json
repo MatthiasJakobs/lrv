@@ -11,17 +11,18 @@
       "file": "src/parser.py",
       "side": "new",
       "lineRange": {
-        "start": 6,
-        "end": 6
+        "start": 4,
+        "end": 4
       },
       "hunk": {
-        "header": "@@ -2,9 +2,9 @@",
+        "header": "@@ -1,28 +1,31 @@",
         "hash": "sha256:fixture-open-parser",
-        "snapshot": "@@ -2,9 +2,9 @@\n \n def parse_quantity(raw: str) -> int:\n     value = int(raw)\n     if value < 1:\n-        raise ValueError(\"quantity must be positive\")\n+        return 1\n     return value"
+        "snapshot": "@@ -1,28 +1,31 @@\n def parse_quantity(raw):\n     value = int(raw)\n     if value < 1:\n-        raise ValueError('quantity must be positive')\n+        return 1\n     return value\n \n \n def parse_price(raw):\n-    value = float(raw)\n+    value = float(raw.replace('$', ''))\n     if value < 0:\n-        raise ValueError('price must be non-negative')\n-    return value\n+        return 0\n+    return round(value, 2)\n \n \n def parse_sku(raw):\n-    sku = raw.strip().upper()\n-    if not sku:\n-        raise ValueError('sku is required')\n-    return sku\n+    sku = raw.strip().upper().replace(' ', '-')\n+    return sku or 'UNKNOWN'\n \n \n def parse_line(raw):\n-    name, quantity, price = raw.split(',')\n+    parts = raw.split(',')\n+    name = parts[0].strip()\n+    quantity = parse_quantity(parts[1])\n+    price = parse_price(parts[2])\n+    sku = parse_sku(parts[3]) if len(parts) > 3 else name\n     return {\n-        'name': name.strip(),\n-        'quantity': parse_quantity(quantity),\n-        'price': parse_price(price),\n+        'name': name,\n+        'quantity': quantity,\n+        'price': price,\n+        'sku': sku,\n     }"
       },
       "body": "This silently changes invalid input instead of rejecting it.",
       "createdAt": "2026-07-04T10:00:00Z",
-      "updatedAt": "2026-07-04T10:00:00Z"
+      "updatedAt": "2026-07-04T10:00:00Z",
+      "placement": "after"
     },
     {
       "id": "LPR-002",
@@ -33,13 +34,52 @@
         "end": 12
       },
       "hunk": {
-        "header": "@@ -9,8 +9,5 @@",
+        "header": "@@ -1,34 +1,41 @@",
         "hash": "sha256:fixture-superseded-discount",
-        "snapshot": "@@ -9,8 +9,5 @@\n \n def apply_discount(total: float, percent: float) -> float:\n-    if percent <= 0:\n-        return total\n     return total - (total * percent / 100)"
+        "snapshot": "@@ -1,34 +1,41 @@\n def subtotal(items):\n     total = 0.0\n     for item in items:\n-        total += item['price'] * item.get('quantity', 1)\n-    return total\n+        if item.get('voided'):\n+            continue\n+        quantity = item.get('quantity', 1)\n+        total += item['price'] * quantity\n+    return round(total, 2)\n \n \n def apply_discount(total, percent):\n-    if percent <= 0:\n-        return total\n     return total - (total * percent / 100)"
       },
       "body": "Negative discounts should not increase the total.",
       "createdAt": "2026-07-04T10:05:00Z",
-      "updatedAt": "2026-07-04T10:15:00Z"
+      "updatedAt": "2026-07-04T10:15:00Z",
+      "placement": "after"
+    },
+    {
+      "id": "LPR-003",
+      "state": "open",
+      "file": "src/receipts.py",
+      "side": "new",
+      "lineRange": {
+        "start": 18,
+        "end": 18
+      },
+      "hunk": {
+        "header": "@@ -9,20 +10,25 @@ def receipt_items(items):",
+        "hash": "sha256:fixture-open-receipt-notes",
+        "snapshot": "@@ -9,20 +10,25 @@ def receipt_items(items):\n     lines = []\n     for item in items:\n         quantity = item.get('quantity', 1)\n+        if quantity == 0:\n+            continue\n         total = item['price'] * quantity\n         lines.append(f'{quantity}x {item[\"name\"]}: ${total:.2f}')\n+        if item.get('note'):\n+            lines.append(f'  note: {item[\"note\"]}')\n     return lines\n \n \n-def receipt_footer(total):\n+def receipt_footer(total, balance_due):\n     return [\n-        '-' * 20,\n+        '-' * 24,\n         f'Total: ${total:.2f}',\n+        f'Balance due: ${balance_due:.2f}',\n     ]\n \n \n def render_receipt(order):\n-    lines = receipt_header(order['id'], order['cashier'])\n+    lines = receipt_header(order['id'], order['cashier'], order['store'])\n     lines.extend(receipt_items(order['items']))\n-    lines.extend(receipt_footer(order['total']))\n+    lines.extend(receipt_footer(order['total'], order.get('balance_due', 0)))\n     return '\\n'.join(lines)"
+      },
+      "body": "Receipt notes need escaping or filtering before they are printed.",
+      "createdAt": "2026-07-04T10:10:00Z",
+      "updatedAt": "2026-07-04T10:10:00Z",
+      "placement": "after"
+    },
+    {
+      "id": "LPR-004",
+      "state": "dismissed",
+      "file": "src/taxes.py",
+      "side": "new",
+      "lineRange": {
+        "start": 17,
+        "end": 18
+      },
+      "hunk": {
+        "header": "@@ -1,24 +1,28 @@",
+        "hash": "sha256:fixture-dismissed-tax-default",
+        "snapshot": "@@ -1,24 +1,28 @@\n def taxable_amount(items):\n     total = 0.0\n     for item in items:\n-        if item.get('tax_exempt'):\n+        quantity = item.get('quantity', 1)\n+        if item.get('tax_exempt') and not item.get('prepared_food'):\n             continue\n-        total += item['price'] * item.get('quantity', 1)\n-    return total\n+        total += item['price'] * quantity\n+    return round(total, 2)\n \n \n def tax_for_region(amount, region):\n     rates = {\n         'default': 0.0,\n         'local': 7.5,\n+        'airport': 9.25,\n     }\n-    rate = rates.get(region, rates['default'])\n-    return amount * rate / 100\n+    rate = rates.get(region, rates['local'])\n+    return round(amount * rate / 100, 2)"
+      },
+      "body": "Reviewer decided the local default is acceptable for this fixture.",
+      "createdAt": "2026-07-04T10:20:00Z",
+      "updatedAt": "2026-07-04T10:25:00Z",
+      "placement": "after"
     }
   ]
 }

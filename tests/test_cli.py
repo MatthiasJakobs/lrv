@@ -32,9 +32,10 @@ class CliTest(unittest.TestCase):
             result = self.run_lpr(repo, 'status')
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('Changed files:\n  M src/calculator.py\n  ?? src/formatters.py\n  M src/parser.py', result.stdout)
-            self.assertIn('  open: 1 (LPR-001)', result.stdout)
+            self.assertIn('Changed files:\n  M src/calculator.py\n  ?? src/formatters.py\n  M src/parser.py\n  M src/receipts.py\n  ?? src/reports.py\n  M src/taxes.py', result.stdout)
+            self.assertIn('  open: 2 (LPR-001, LPR-003)', result.stdout)
             self.assertIn('  superseded: 1 (LPR-002)', result.stdout)
+            self.assertIn('  dismissed: 1 (LPR-004)', result.stdout)
 
     def test_bare_command_prints_review_when_not_interactive(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -45,9 +46,9 @@ class CliTest(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('lpr review - HEAD', result.stdout)
-            self.assertIn('Changed files:\n  M src/calculator.py\n  ?? src/formatters.py\n  M src/parser.py', result.stdout)
+            self.assertIn('Changed files:\n  M src/calculator.py\n  ?? src/formatters.py\n  M src/parser.py\n  M src/receipts.py\n  ?? src/reports.py\n  M src/taxes.py', result.stdout)
             self.assertIn('--- M src/parser.py ---', result.stdout)
-            self.assertIn('>>> LPR-001 [open] src/parser.py:6', result.stdout)
+            self.assertIn('>>> LPR-001 [open] src/parser.py:4', result.stdout)
             self.assertIn('>>> This silently changes invalid input instead of rejecting it.', result.stdout)
 
     def test_bare_command_accepts_repository_path_before_command(self):
@@ -59,7 +60,7 @@ class CliTest(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('--- ?? src/formatters.py ---', result.stdout)
-            self.assertIn('+def format_receipt_line(name: str, quantity: int, price: float) -> str:', result.stdout)
+            self.assertIn('+def format_receipt_line(name, quantity, price):', result.stdout)
 
     def test_tui_tab_switches_focus_between_file_list_and_diff(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -114,14 +115,14 @@ class CliTest(unittest.TestCase):
 
             state = load_state(repo)
             comment = state.comments[-1]
-            self.assertEqual(comment.id, 'LPR-003')
+            self.assertEqual(comment.id, 'LPR-005')
             self.assertEqual(comment.state, 'open')
             self.assertEqual(comment.file, 'src/parser.py')
             self.assertEqual(comment.side, 'new')
-            self.assertEqual(comment.line_range.start, 7)
+            self.assertEqual(comment.line_range.start, 4)
             self.assertEqual(comment.body, 'Keep rejecting invalid quantities.')
             self.assertEqual(comment.placement, 'after')
-            self.assertEqual(comment.hunk.header, '@@ -4,7 +4,7 @@ from __future__ import annotations')
+            self.assertEqual(comment.hunk.header, '@@ -1,28 +1,31 @@')
             self.assertIn('+        return 1', comment.hunk.snapshot)
 
     def test_tui_o_and_O_insert_below_and_above_current_line(self):
@@ -212,12 +213,12 @@ class CliTest(unittest.TestCase):
 
             app.diff_line = 0
             app.start_input(-1, DummyCurses())
-            self.assertEqual(rows[app.diff_line].text, ' def parse_quantity(raw: str) -> int:')
+            self.assertEqual(rows[app.diff_line].text, ' def parse_quantity(raw):')
             app.cancel_input(DummyCurses())
 
             app.diff_line = len(rows) - 1
             app.start_input(1, DummyCurses())
-            self.assertEqual(rows[app.diff_line].text, '     return value')
+            self.assertEqual(rows[app.diff_line].text, '     }')
 
     def test_tui_d_deletes_selected_inline_comment(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -244,11 +245,14 @@ class CliTest(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('# LPR Review', result.stdout)
-            self.assertIn('### LPR-001 src/parser.py:6', result.stdout)
+            self.assertIn('### LPR-001 src/parser.py:4', result.stdout)
             self.assertIn('This silently changes invalid input instead of rejecting it.', result.stdout)
-            self.assertIn('```diff\n@@ -2,9 +2,9 @@', result.stdout)
+            self.assertIn('### LPR-003 src/receipts.py:18', result.stdout)
+            self.assertIn('Receipt notes need escaping or filtering before they are printed.', result.stdout)
+            self.assertIn('```diff\n@@ -1,28 +1,31 @@', result.stdout)
             self.assertIn('Do not resolve, dismiss, or clear LPR comments.', result.stdout)
             self.assertNotIn('LPR-002', result.stdout)
+            self.assertNotIn('LPR-004', result.stdout)
 
     def test_export_accepts_repository_path(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -258,7 +262,7 @@ class CliTest(unittest.TestCase):
             result = self.run_lpr(ROOT, 'export', str(repo))
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('### LPR-001 src/parser.py:6', result.stdout)
+            self.assertIn('### LPR-001 src/parser.py:4', result.stdout)
 
     def test_export_accepts_repository_path_before_command(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -268,7 +272,7 @@ class CliTest(unittest.TestCase):
             result = self.run_lpr(ROOT, str(repo), 'export')
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('### LPR-001 src/parser.py:6', result.stdout)
+            self.assertIn('### LPR-001 src/parser.py:4', result.stdout)
 
     def test_export_accepts_repo_option(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -278,7 +282,7 @@ class CliTest(unittest.TestCase):
             result = self.run_lpr(ROOT, '--repo', str(repo), 'export')
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('### LPR-001 src/parser.py:6', result.stdout)
+            self.assertIn('### LPR-001 src/parser.py:4', result.stdout)
 
     def test_show_prints_one_comment_including_non_open_state(self):
         with tempfile.TemporaryDirectory() as temp:
