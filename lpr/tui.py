@@ -4,7 +4,7 @@ import re
 import sys
 
 from lpr.git import changed_files, file_diff, file_lines, head_revision
-from lpr.state import HunkSnapshot, ReviewState, append_comment, load_state, mark_comments_superseded, remove_comment, save_state, set_comment_state
+from lpr.state import HunkSnapshot, ReviewState, append_comment, load_state, mark_comments_superseded, remove_comment, save_state, set_comment_state, update_comment_body
 
 
 HUNK_RE = re.compile(r'^@@ -(?P<old_start>\d+)(?:,\d+)? \+(?P<new_start>\d+)(?:,\d+)? @@')
@@ -315,6 +315,7 @@ class ReviewApp:
         self.input_text = ''
         self.input_anchor = None
         self.input_end_line = None
+        self.input_comment_id = None
         self.input_placement = 'after'
         self.visual_anchor = None
         self.status_message = ''
@@ -395,6 +396,8 @@ class ReviewApp:
                 self.start_input(-1, curses)
             elif key in (ord('v'), ord('V')):
                 self.start_visual()
+            elif key == ord('i'):
+                self.start_comment_edit(curses)
             elif key == ord('d'):
                 self.delete_selected_comment()
 
@@ -515,6 +518,7 @@ class ReviewApp:
         anchor, end_line = selection
         self.input_anchor = anchor
         self.input_end_line = end_line
+        self.input_comment_id = None
         self.input_text = ''
         self.input_placement = 'after'
         self.mode = 'input'
@@ -696,9 +700,35 @@ class ReviewApp:
         if self.input_anchor is None or self.input_anchor.hunk is None:
             return
         self.input_text = ''
+        self.input_comment_id = None
         self.input_placement = 'before' if direction < 0 else 'after'
         self.mode = 'input'
         self.set_cursor(curses, 1)
+
+    def start_comment_edit(self, curses):
+        comment = self.selected_inline_comment()
+        if comment is None:
+            return
+        self.input_comment_id = comment.id
+        self.input_text = comment.body
+        self.input_anchor = DiffAnchor(comment.file, comment.side, comment.line_range.start, comment.hunk)
+        self.input_end_line = comment.line_range.end
+        self.input_placement = comment.placement
+        self.mode = 'input'
+        self.set_cursor(curses, 1)
+
+    def selected_inline_comment(self):
+        rows = self.selected_file_rows()
+        if not rows:
+            return None
+        index = max(0, min(len(rows) - 1, self.diff_line))
+        comment_id = rows[index].comment_id
+        if comment_id is None:
+            return None
+        for comment in self.state.comments:
+            if comment.id == comment_id:
+                return comment
+        return None
 
     def comment_anchor_index(self, direction):
         rows = self.selected_file_rows()
@@ -735,6 +765,7 @@ class ReviewApp:
         self.input_text = ''
         self.input_anchor = None
         self.input_end_line = None
+        self.input_comment_id = None
         self.input_placement = 'after'
         self.visual_anchor = None
         self.set_cursor(curses, 0)
@@ -744,6 +775,12 @@ class ReviewApp:
         if body:
             anchor = self.input_anchor
             scroll = self.scroll
+            if self.input_comment_id is not None:
+                self.state = update_comment_body(self.state, self.input_comment_id, body)
+                save_state(self.repo, self.state)
+                self.cancel_input(curses)
+                self.reload(target_anchor=anchor, target_scroll=scroll)
+                return
             state = self.state_with_base_commit()
             self.state = append_comment(
                 state,

@@ -277,6 +277,46 @@ class CliTest(unittest.TestCase):
             self.assertEqual(comment.hunk.header, '@@ -1,28 +1,31 @@')
             self.assertIn('+        return 1', comment.hunk.snapshot)
 
+    def test_tui_i_edits_selected_inline_comment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            self.select_file(app, 'src/parser.py')
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = next(index for index, row in enumerate(rows) if row.comment_id == 'LPR-001')
+
+            original = next(comment for comment in app.state.comments if comment.id == 'LPR-001')
+            app.start_comment_edit(DummyCurses())
+            self.assertEqual(app.mode, 'input')
+            self.assertEqual(app.input_text, original.body)
+            app.input_text = 'Still reject invalid quantities.'
+            app.save_input(DummyCurses())
+
+            comment = next(comment for comment in load_state(repo).comments if comment.id == 'LPR-001')
+            self.assertEqual(comment.body, 'Still reject invalid quantities.')
+            self.assertEqual(comment.line_range.start, original.line_range.start)
+            self.assertEqual(comment.line_range.end, original.line_range.end)
+            self.assertEqual(comment.hunk.hash, original.hunk.hash)
+            self.assertEqual(comment.created_at, original.created_at)
+            self.assertNotEqual(comment.updated_at, original.updated_at)
+
+    def test_tui_i_does_nothing_when_cursor_is_not_on_comment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            self.select_file(app, 'src/parser.py')
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = self.row_index_ending(rows, '        return 1')
+
+            app.start_comment_edit(DummyCurses())
+
+            self.assertEqual(app.mode, 'normal')
+            self.assertIsNone(app.input_comment_id)
+
     def test_tui_visual_mode_comments_selected_line_range(self):
         with tempfile.TemporaryDirectory() as temp:
             repo = Path(temp) / 'repo'

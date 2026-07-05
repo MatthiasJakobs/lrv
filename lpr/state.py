@@ -141,6 +141,39 @@ def remove_comment(state, comment_id):
     )
 
 
+def update_comment_body(state, comment_id, body):
+    comments = []
+    changed = False
+    now = utc_now()
+    for comment in state.comments:
+        if comment.id != comment_id:
+            comments.append(comment)
+            continue
+        changed = True
+        comments.append(
+            Comment(
+                id=comment.id,
+                state=comment.state,
+                file=comment.file,
+                side=comment.side,
+                line_range=comment.line_range,
+                hunk=comment.hunk,
+                body=body,
+                created_at=comment.created_at,
+                updated_at=now,
+                placement=comment.placement,
+            )
+        )
+    if not changed:
+        return state
+    return ReviewState(
+        version=state.version,
+        repo_root=state.repo_root,
+        base_commit=state.base_commit,
+        comments=tuple(comments),
+    )
+
+
 def set_comment_state(state, comment_id, comment_state):
     comments = []
     changed = False
