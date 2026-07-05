@@ -173,6 +173,43 @@ def set_comment_state(state, comment_id, comment_state):
     )
 
 
+def mark_comments_superseded(state, comment_ids):
+    ids = set(comment_ids)
+    if not ids:
+        return state
+
+    comments = []
+    changed = False
+    now = utc_now()
+    for comment in state.comments:
+        if comment.id not in ids or comment.state != 'open':
+            comments.append(comment)
+            continue
+        changed = True
+        comments.append(
+            Comment(
+                id=comment.id,
+                state='superseded',
+                file=comment.file,
+                side=comment.side,
+                line_range=comment.line_range,
+                hunk=comment.hunk,
+                body=comment.body,
+                created_at=comment.created_at,
+                updated_at=now,
+                placement=comment.placement,
+            )
+        )
+    if not changed:
+        return state
+    return ReviewState(
+        version=state.version,
+        repo_root=state.repo_root,
+        base_commit=state.base_commit,
+        comments=tuple(comments),
+    )
+
+
 def next_comment_id(comments):
     highest = 0
     for comment in comments:

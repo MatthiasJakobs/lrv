@@ -28,6 +28,20 @@ class CliTest(unittest.TestCase):
         env['PYTHONPATH'] = str(ROOT)
         return subprocess.run([sys.executable, '-m', 'lpr', *args], cwd=repo, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
+    def add_parser_comment(self, repo, body='Keep rejecting invalid quantities.'):
+        app = ReviewApp(repo, load_state(repo))
+        app.selected = 2
+        app.focus = 'diff'
+        rows = app.selected_file_rows()
+        app.diff_line = next(index for index, row in enumerate(rows) if row.text == '+        return 1')
+        app.start_input(1, DummyCurses())
+        app.input_text = body
+        app.save_input(DummyCurses())
+        return load_state(repo).comments[-1]
+
+    def comments_by_id(self, repo):
+        return {comment.id: comment for comment in load_state(repo).comments}
+
     def test_status_lists_changed_files_and_comment_counts(self):
         with tempfile.TemporaryDirectory() as temp:
             repo = Path(temp) / 'repo'
@@ -234,6 +248,25 @@ class CliTest(unittest.TestCase):
             self.assertEqual(comment.hunk.header, '@@ -1,28 +1,31 @@')
             self.assertIn('+        return 1', comment.hunk.snapshot)
 
+    def test_tui_insert_mode_marks_comment_superseded_when_hunk_changes_before_save(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            app.selected = 2
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = next(index for index, row in enumerate(rows) if row.text == '+        return 1')
+            app.start_input(1, DummyCurses())
+            parser = repo / 'src' / 'parser.py'
+            parser.write_text(parser.read_text().replace("return sku or 'UNKNOWN'", "return sku or 'UNKNOWN-SKU'"))
+
+            app.input_text = 'Keep rejecting invalid quantities.'
+            app.save_input(DummyCurses())
+
+            comment = load_state(repo).comments[-1]
+            self.assertEqual(comment.state, 'superseded')
+
     def test_tui_o_and_O_insert_below_and_above_current_line(self):
         with tempfile.TemporaryDirectory() as temp:
             repo = Path(temp) / 'repo'
@@ -345,6 +378,41 @@ class CliTest(unittest.TestCase):
             self.assertNotIn('LPR-001', [comment.id for comment in state.comments])
             self.assertIn('LPR-002', [comment.id for comment in state.comments])
 
+    def test_tui_refresh_marks_comment_superseded_when_commented_hunk_changes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            comment = self.add_parser_comment(repo)
+            parser = repo / 'src' / 'parser.py'
+            parser.write_text(parser.read_text().replace("return sku or 'UNKNOWN'", "return sku or 'UNKNOWN-SKU'"))
+
+            ReviewApp(repo, load_state(repo)).reload()
+
+            self.assertEqual(self.comments_by_id(repo)[comment.id].state, 'superseded')
+
+    def test_tui_refresh_keeps_comment_open_when_unrelated_hunk_changes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            comment = self.add_parser_comment(repo)
+            taxes = repo / 'src' / 'taxes.py'
+            taxes.write_text(taxes.read_text().replace("'airport': 9.25", "'airport': 9.5"))
+
+            ReviewApp(repo, load_state(repo)).reload()
+
+            self.assertEqual(self.comments_by_id(repo)[comment.id].state, 'open')
+
+    def test_tui_refresh_marks_comment_superseded_when_commented_hunk_disappears(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            comment = self.add_parser_comment(repo)
+            subprocess.run(['git', 'checkout', '--', 'src/parser.py'], cwd=repo, check=True)
+
+            ReviewApp(repo, load_state(repo)).reload()
+
+            self.assertEqual(self.comments_by_id(repo)[comment.id].state, 'superseded')
+
     def test_export_prints_only_open_comments(self):
         with tempfile.TemporaryDirectory() as temp:
             repo = Path(temp) / 'repo'
@@ -362,6 +430,20 @@ class CliTest(unittest.TestCase):
             self.assertIn('Do not resolve, dismiss, or clear LPR comments.', result.stdout)
             self.assertNotIn('LPR-002', result.stdout)
             self.assertNotIn('LPR-004', result.stdout)
+
+    def test_export_marks_changed_commented_hunk_superseded_before_printing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            comment = self.add_parser_comment(repo)
+            parser = repo / 'src' / 'parser.py'
+            parser.write_text(parser.read_text().replace("return sku or 'UNKNOWN'", "return sku or 'UNKNOWN-SKU'"))
+
+            result = self.run_lpr(repo, 'export')
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn(comment.id, result.stdout)
+            self.assertEqual(self.comments_by_id(repo)[comment.id].state, 'superseded')
 
     def test_export_accepts_repository_path(self):
         with tempfile.TemporaryDirectory() as temp:

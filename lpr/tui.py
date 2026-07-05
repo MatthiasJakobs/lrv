@@ -3,7 +3,7 @@ import re
 import sys
 
 from lpr.git import changed_files, file_diff, head_revision
-from lpr.state import HunkSnapshot, ReviewState, append_comment, load_state, remove_comment, save_state, set_comment_state
+from lpr.state import HunkSnapshot, ReviewState, append_comment, load_state, mark_comments_superseded, remove_comment, save_state, set_comment_state
 
 
 HUNK_RE = re.compile(r'^@@ -(?P<old_start>\d+)(?:,\d+)? \+(?P<new_start>\d+)(?:,\d+)? @@')
@@ -83,6 +83,36 @@ def rows_for_file(repo, state, file):
     return rendered
 
 
+def refresh_superseded_comments(repo, state):
+    if not any(comment.state == 'open' for comment in state.comments):
+        return state
+
+    current = current_hunks_by_file(repo)
+    superseded = []
+    for comment in state.comments:
+        if comment.state != 'open':
+            continue
+        hunks = current.get(comment.file, {})
+        current_hash = hunks.get(comment.hunk.header)
+        if current_hash != comment.hunk.hash:
+            superseded.append(comment.id)
+
+    refreshed = mark_comments_superseded(state, superseded)
+    if refreshed is not state:
+        save_state(repo, refreshed)
+    return refreshed
+
+
+def current_hunks_by_file(repo):
+    current = {}
+    for file in changed_files(repo):
+        hunks = {}
+        for hunk in hunk_snapshots(file_diff(repo, file).splitlines()):
+            hunks[hunk.header] = hunk.hash
+        current[file.path] = hunks
+    return current
+
+
 def matching_row_comments(comments, seen, row, placement):
     if row.anchor is None:
         return []
@@ -99,25 +129,8 @@ def matching_row_comments(comments, seen, row, placement):
 
 
 def diff_rows_for_file(path, diff_lines):
-    hunk_ranges = []
-    for index, line in enumerate(diff_lines):
-        if not HUNK_RE.match(line):
-            continue
-        end = len(diff_lines)
-        for next_index in range(index + 1, len(diff_lines)):
-            if HUNK_RE.match(diff_lines[next_index]):
-                end = next_index
-                break
-        hunk_ranges.append((index, end))
-
     hunk_by_index = {}
-    for start, end in hunk_ranges:
-        snapshot = '\n'.join(diff_lines[start:end])
-        hunk = HunkSnapshot(
-            header=diff_lines[start],
-            hash=f'sha256:{hashlib.sha256(snapshot.encode()).hexdigest()}',
-            snapshot=snapshot,
-        )
+    for start, end, hunk in hunk_snapshots_with_ranges(diff_lines):
         for index in range(start, end):
             hunk_by_index[index] = hunk
 
@@ -147,6 +160,34 @@ def diff_rows_for_file(path, diff_lines):
 
         rendered.append(RenderedLine(line, anchor))
     return rendered
+
+
+def hunk_snapshots(diff_lines):
+    return [hunk for start, end, hunk in hunk_snapshots_with_ranges(diff_lines)]
+
+
+def hunk_snapshots_with_ranges(diff_lines):
+    hunk_ranges = []
+    for index, line in enumerate(diff_lines):
+        if not HUNK_RE.match(line):
+            continue
+        end = len(diff_lines)
+        for next_index in range(index + 1, len(diff_lines)):
+            if HUNK_RE.match(diff_lines[next_index]):
+                end = next_index
+                break
+        hunk_ranges.append((index, end))
+
+    hunks = []
+    for start, end in hunk_ranges:
+        snapshot = '\n'.join(diff_lines[start:end])
+        hunk = HunkSnapshot(
+            header=diff_lines[start],
+            hash=f'sha256:{hashlib.sha256(snapshot.encode()).hexdigest()}',
+            snapshot=snapshot,
+        )
+        hunks.append((start, end, hunk))
+    return hunks
 
 
 def comment_matches_line(comment, old_line, new_line):
@@ -200,6 +241,7 @@ class ReviewApp:
 
     def reload(self):
         self.state = load_state(self.repo)
+        self.state = refresh_superseded_comments(self.repo, self.state)
         self.files = changed_files(self.repo)
         if self.selected >= len(self.files):
             self.selected = max(0, len(self.files) - 1)
@@ -477,6 +519,9 @@ class ReviewApp:
                 placement=self.input_placement,
             )
             save_state(self.repo, self.state)
+            self.cancel_input(curses)
+            self.reload()
+            return
         self.cancel_input(curses)
 
     def delete_selected_comment(self):

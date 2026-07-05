@@ -5,7 +5,7 @@ from pathlib import Path
 from lpr.export import render_export, render_single_comment
 from lpr.git import GitError, changed_files, head_revision, repo_root
 from lpr.state import StateError, comments_by_state, load_state
-from lpr.tui import run_tui
+from lpr.tui import refresh_superseded_comments, run_tui
 
 
 def main(argv=None):
@@ -16,7 +16,7 @@ def main(argv=None):
 
     try:
         repo = repo_root(command_path(args))
-        state = load_state(repo)
+        state = refresh_superseded_comments(repo, load_state(repo))
         return args.handler(repo, state, args)
     except (GitError, StateError) as error:
         print(f'lpr: {error}', file=sys.stderr)
