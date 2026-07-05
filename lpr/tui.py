@@ -1,4 +1,5 @@
 import hashlib
+import math
 import re
 import sys
 
@@ -201,6 +202,38 @@ def full_rows_for_file(repo, file, diff_lines):
 def format_deleted_row(row):
     text = row.text[1:] if row.text.startswith('-') else row.text
     return RenderedLine(f'-{row.anchor.line:>4} {text}', row.anchor, row.comment_id, kind='deleted')
+
+
+def minimap_kind(rows):
+    kinds = {row.kind for row in rows}
+    if any(row.comment_id is not None or row.text.startswith('>>>') for row in rows):
+        return 'comment'
+    if 'added' in kinds and 'deleted' in kinds:
+        return 'mixed'
+    if 'deleted' in kinds:
+        return 'deleted'
+    if 'added' in kinds:
+        return 'added'
+    return 'unchanged'
+
+
+def minimap_buckets(rows, height):
+    if height <= 0 or not rows:
+        return []
+    buckets = []
+    for index in range(height):
+        start = index * len(rows) // height
+        end = max(start + 1, (index + 1) * len(rows) // height)
+        buckets.append(minimap_kind(rows[start:end]))
+    return buckets
+
+
+def minimap_viewport(total, scroll, visible_height, map_height):
+    if total <= 0 or visible_height <= 0 or map_height <= 0:
+        return (0, -1)
+    start = min(map_height - 1, scroll * map_height // total)
+    end = min(map_height - 1, max(start, math.ceil((scroll + visible_height) * map_height / total) - 1))
+    return (start, end)
 
 
 def hunk_snapshots(diff_lines):
@@ -679,15 +712,45 @@ class ReviewApp:
         self.visible_diff_height = visible_height
         self.clamp_scroll(visible_height)
         visible = rows[self.scroll:self.scroll + visible_height]
+        minimap_x = self.minimap_x(width, x)
+        text_width = minimap_x - x - 1 if minimap_x is not None else width - x - 1
 
         for index, row in enumerate(visible):
             attr = self.line_attr(curses, row)
             if self.focus == 'diff' and self.scroll + index == self.diff_line:
                 attr |= curses.A_REVERSE
-            self.addstr(screen, index + 4, x, row.text[:width - x - 1], attr)
+            self.addstr(screen, index + 4, x, row.text[:text_width], attr)
+
+        if minimap_x is not None:
+            self.draw_minimap(screen, rows, 4, minimap_x, visible_height, curses)
 
         progress = self.diff_progress_label()
         self.addstr(screen, height - 1, max(x, width - len(progress) - 1), progress, curses.A_BOLD)
+
+    def minimap_x(self, width, main_x):
+        if width - main_x < 44:
+            return None
+        return width - 3
+
+    def draw_minimap(self, screen, rows, y, x, height, curses):
+        buckets = minimap_buckets(rows, height)
+        view_start, view_end = minimap_viewport(len(rows), self.scroll, height, len(buckets))
+        for index, kind in enumerate(buckets):
+            marker = '#' if kind != 'unchanged' else '.'
+            pointer = '>' if view_start <= index <= view_end else ' '
+            self.addstr(screen, y + index, x, pointer, curses.A_BOLD if pointer == '>' else curses.A_DIM)
+            self.addstr(screen, y + index, x + 1, marker, self.minimap_attr(curses, kind))
+
+    def minimap_attr(self, curses, kind):
+        if kind == 'comment':
+            return curses.color_pair(5) | curses.A_BOLD
+        if kind == 'mixed':
+            return curses.color_pair(4) | curses.A_BOLD
+        if kind == 'added':
+            return curses.color_pair(2)
+        if kind == 'deleted':
+            return curses.color_pair(3)
+        return curses.A_DIM
 
     def draw_input(self, screen, height, width, curses):
         if self.mode != 'input' or height <= 1:

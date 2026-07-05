@@ -7,7 +7,7 @@ from pathlib import Path
 
 from scripts.materialize_fixture_repo import materialize
 from lpr.state import load_state
-from lpr.tui import ReviewApp
+from lpr.tui import RenderedLine, ReviewApp, minimap_buckets, minimap_viewport
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,7 +30,7 @@ class CliTest(unittest.TestCase):
 
     def add_parser_comment(self, repo, body='Keep rejecting invalid quantities.'):
         app = ReviewApp(repo, load_state(repo))
-        app.selected = 2
+        self.select_file(app, 'src/parser.py')
         app.focus = 'diff'
         rows = app.selected_file_rows()
         app.diff_line = self.row_index_ending(rows, '        return 1')
@@ -41,6 +41,9 @@ class CliTest(unittest.TestCase):
 
     def comments_by_id(self, repo):
         return {comment.id: comment for comment in load_state(repo).comments}
+
+    def select_file(self, app, path):
+        app.selected = next(index for index, file in enumerate(app.files) if file.path == path)
 
     def row_index_ending(self, rows, text):
         return next(index for index, row in enumerate(rows) if row.text.endswith(text))
@@ -56,10 +59,26 @@ class CliTest(unittest.TestCase):
             result = self.run_lpr(repo, 'status')
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('Changed files:\n  M src/calculator.py\n  ?? src/formatters.py\n  M src/parser.py\n  M src/receipts.py\n  ?? src/reports.py\n  M src/taxes.py', result.stdout)
+            self.assertIn('Changed files:\n  M src/calculator.py\n  ?? src/formatters.py\n  M src/long_review.py\n  M src/parser.py\n  M src/receipts.py\n  ?? src/reports.py\n  M src/taxes.py', result.stdout)
             self.assertIn('  open: 2 (LPR-001, LPR-003)', result.stdout)
             self.assertIn('  superseded: 1 (LPR-002)', result.stdout)
             self.assertIn('  dismissed: 1 (LPR-004)', result.stdout)
+
+    def test_minimap_buckets_prioritize_comments_and_diffs(self):
+        rows = [
+            RenderedLine('    1 unchanged', None, kind='unchanged'),
+            RenderedLine('+   2 added', None, kind='added'),
+            RenderedLine('-   3 deleted', None, kind='deleted'),
+            RenderedLine('>>> comment', None, 'LPR-001'),
+        ]
+
+        self.assertEqual(minimap_buckets(rows, 4), ['unchanged', 'added', 'deleted', 'comment'])
+        self.assertEqual(minimap_buckets(rows[1:3], 1), ['mixed'])
+
+    def test_minimap_viewport_maps_scroll_to_compressed_rows(self):
+        self.assertEqual(minimap_viewport(100, 0, 20, 10), (0, 1))
+        self.assertEqual(minimap_viewport(100, 50, 20, 10), (5, 6))
+        self.assertEqual(minimap_viewport(100, 90, 20, 10), (9, 9))
 
     def test_bare_command_prints_review_when_not_interactive(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -70,7 +89,7 @@ class CliTest(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('lpr review - HEAD', result.stdout)
-            self.assertIn('Changed files:\n  M src/calculator.py\n  ?? src/formatters.py\n  M src/parser.py\n  M src/receipts.py\n  ?? src/reports.py\n  M src/taxes.py', result.stdout)
+            self.assertIn('Changed files:\n  M src/calculator.py\n  ?? src/formatters.py\n  M src/long_review.py\n  M src/parser.py\n  M src/receipts.py\n  ?? src/reports.py\n  M src/taxes.py', result.stdout)
             self.assertIn('--- M src/parser.py ---', result.stdout)
             self.assertIn('  40 def format_total(total):', result.stdout)
             self.assertIn('-   4         raise ValueError(\'quantity must be positive\')', result.stdout)
@@ -235,7 +254,7 @@ class CliTest(unittest.TestCase):
             repo = Path(temp) / 'repo'
             materialize('python-review-basic', repo)
             app = ReviewApp(repo, load_state(repo))
-            app.selected = 2
+            self.select_file(app, 'src/parser.py')
             app.focus = 'diff'
             rows = app.selected_file_rows()
             app.diff_line = self.row_index_ending(rows, '        return 1')
@@ -262,7 +281,7 @@ class CliTest(unittest.TestCase):
             repo = Path(temp) / 'repo'
             materialize('python-review-basic', repo)
             app = ReviewApp(repo, load_state(repo))
-            app.selected = 2
+            self.select_file(app, 'src/parser.py')
             app.focus = 'diff'
             rows = app.selected_file_rows()
             app.diff_line = len(rows) - 1
@@ -286,7 +305,7 @@ class CliTest(unittest.TestCase):
             repo = Path(temp) / 'repo'
             materialize('python-review-basic', repo)
             app = ReviewApp(repo, load_state(repo))
-            app.selected = 2
+            self.select_file(app, 'src/parser.py')
             app.focus = 'diff'
             rows = app.selected_file_rows()
             app.diff_line = self.row_index_ending(rows, '        return 1')
@@ -305,7 +324,7 @@ class CliTest(unittest.TestCase):
             repo = Path(temp) / 'repo'
             materialize('python-review-basic', repo)
             app = ReviewApp(repo, load_state(repo))
-            app.selected = 2
+            self.select_file(app, 'src/parser.py')
             app.focus = 'diff'
             rows = app.selected_file_rows()
             app.diff_line = self.row_index_ending(rows, '        return 1')
@@ -382,7 +401,7 @@ class CliTest(unittest.TestCase):
             repo = Path(temp) / 'repo'
             materialize('python-review-basic', repo)
             app = ReviewApp(repo, load_state(repo))
-            app.selected = 2
+            self.select_file(app, 'src/parser.py')
             app.focus = 'diff'
             rows = app.selected_file_rows()
 
@@ -400,7 +419,7 @@ class CliTest(unittest.TestCase):
             repo = Path(temp) / 'repo'
             materialize('python-review-basic', repo)
             app = ReviewApp(repo, load_state(repo))
-            app.selected = 2
+            self.select_file(app, 'src/parser.py')
             app.focus = 'diff'
             rows = app.selected_file_rows()
             app.diff_line = next(index for index, row in enumerate(rows) if row.text.startswith('>>> LPR-001 '))

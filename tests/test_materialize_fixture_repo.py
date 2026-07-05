@@ -20,7 +20,7 @@ class MaterializeFixtureRepoTest(unittest.TestCase):
 
             self.assertEqual(
                 self.run_git(repo, 'diff', '--name-only').splitlines(),
-                ['src/calculator.py', 'src/parser.py', 'src/receipts.py', 'src/taxes.py'],
+                ['src/calculator.py', 'src/long_review.py', 'src/parser.py', 'src/receipts.py', 'src/taxes.py'],
             )
             self.assertEqual(
                 self.run_git(repo, 'ls-files', '--others', '--exclude-standard').splitlines(),
