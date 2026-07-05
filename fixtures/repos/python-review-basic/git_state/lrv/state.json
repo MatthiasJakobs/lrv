@@ -6,7 +6,7 @@
   },
   "comments": [
     {
-      "id": "LPR-001",
+      "id": "LRV-001",
       "state": "open",
       "file": "src/parser.py",
       "side": "new",
@@ -25,7 +25,7 @@
       "placement": "after"
     },
     {
-      "id": "LPR-002",
+      "id": "LRV-002",
       "state": "superseded",
       "file": "src/calculator.py",
       "side": "new",
@@ -44,7 +44,7 @@
       "placement": "after"
     },
     {
-      "id": "LPR-003",
+      "id": "LRV-003",
       "state": "open",
       "file": "src/receipts.py",
       "side": "new",
@@ -63,7 +63,7 @@
       "placement": "after"
     },
     {
-      "id": "LPR-004",
+      "id": "LRV-004",
       "state": "dismissed",
       "file": "src/taxes.py",
       "side": "new",

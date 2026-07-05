@@ -2,10 +2,10 @@ import argparse
 import sys
 from pathlib import Path
 
-from lpr.export import render_export, render_single_comment
-from lpr.git import GitError, changed_files, head_revision, repo_root
-from lpr.state import StateError, comments_by_state, load_state
-from lpr.tui import refresh_superseded_comments, run_tui
+from lrv.export import render_export, render_single_comment
+from lrv.git import GitError, changed_files, head_revision, repo_root
+from lrv.state import StateError, comments_by_state, load_state
+from lrv.tui import refresh_superseded_comments, run_tui
 
 
 def main(argv=None):
@@ -19,12 +19,12 @@ def main(argv=None):
         state = refresh_superseded_comments(repo, load_state(repo))
         return args.handler(repo, state, args)
     except (GitError, StateError) as error:
-        print(f'lpr: {error}', file=sys.stderr)
+        print(f'lrv: {error}', file=sys.stderr)
         return 1
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog='lpr')
+    parser = argparse.ArgumentParser(prog='lrv')
     parser.add_argument('-C', '--repo', type=Path, help='Repository path. Defaults to the current directory.')
     parser.set_defaults(handler=command_tui)
     subcommands = parser.add_subparsers(dest='command')
@@ -38,7 +38,7 @@ def build_parser():
     export.set_defaults(handler=command_export)
 
     show = subcommands.add_parser('show', help='Show one comment as Markdown.')
-    show.add_argument('id', help='Comment ID, for example LPR-001.')
+    show.add_argument('id', help='Comment ID, for example LRV-001.')
     show.add_argument('path', nargs='?', type=Path, help='Repository path. Defaults to the current directory.')
     show.set_defaults(handler=command_show)
 
@@ -93,7 +93,7 @@ def command_show(repo, state, args):
     del repo
     comment = find_comment(state.comments, args.id)
     if comment is None:
-        print(f'lpr: unknown comment id: {args.id}', file=sys.stderr)
+        print(f'lrv: unknown comment id: {args.id}', file=sys.stderr)
         return 1
     print(render_single_comment(state, comment), end='')
     return 0

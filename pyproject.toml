@@ -1,8 +1,11 @@
 [project]
-name = "lpr"
+name = "lrv"
 version = "0.1.0"
 description = "Local review tool for coding-agent changes."
 requires-python = ">=3.11"
 
 [project.scripts]
-lpr = "lpr.cli:main"
+lrv = "lrv.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["lrv"]

@@ -1,7 +1,7 @@
 def render_export(state, comments=None):
     selected = comments if comments is not None else open_comments(state)
     lines = [
-        '# LPR Review',
+        '# LRV Review',
         '',
         f'Base: HEAD {state.base_commit}',
         '',
@@ -22,7 +22,7 @@ def render_export(state, comments=None):
         [
             '',
             'Instruction:',
-            'Address the comment above in the code. Do not resolve, dismiss, or clear LPR comments.',
+            'Address the comment above in the code. Do not resolve, dismiss, or clear LRV comments.',
         ]
     )
     return '\n'.join(lines) + '\n'
@@ -30,7 +30,7 @@ def render_export(state, comments=None):
 
 def render_single_comment(state, comment):
     lines = [
-        '# LPR Comment',
+        '# LRV Comment',
         '',
         f'Base: HEAD {state.base_commit}',
         '',

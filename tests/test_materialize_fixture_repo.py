@@ -27,17 +27,17 @@ class MaterializeFixtureRepoTest(unittest.TestCase):
                 ['src/formatters.py', 'src/reports.py'],
             )
 
-    def test_writes_mock_lpr_state_inside_git_directory(self):
+    def test_writes_mock_lrv_state_inside_git_directory(self):
         with tempfile.TemporaryDirectory() as temp:
             repo = Path(temp) / 'repo'
 
             materialize('python-review-basic', repo)
 
-            state = json.loads((repo / '.git' / 'lpr' / 'state.json').read_text())
+            state = json.loads((repo / '.git' / 'lrv' / 'state.json').read_text())
             self.assertEqual(state['version'], 1)
             self.assertEqual(state['repo']['root'], str(repo))
             self.assertEqual(state['repo']['baseCommit'], self.run_git(repo, 'rev-parse', 'HEAD'))
-            self.assertEqual([comment['id'] for comment in state['comments']], ['LPR-001', 'LPR-002', 'LPR-003', 'LPR-004'])
+            self.assertEqual([comment['id'] for comment in state['comments']], ['LRV-001', 'LRV-002', 'LRV-003', 'LRV-004'])
             self.assertEqual(state['comments'][0]['state'], 'open')
             self.assertEqual(state['comments'][1]['state'], 'superseded')
             self.assertEqual(state['comments'][2]['state'], 'open')

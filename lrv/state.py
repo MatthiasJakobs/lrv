@@ -50,7 +50,7 @@ class ReviewState:
 
 
 def state_path(repo):
-    return repo / '.git' / 'lpr' / 'state.json'
+    return repo / '.git' / 'lrv' / 'state.json'
 
 
 def load_state(repo):
@@ -61,7 +61,7 @@ def load_state(repo):
     try:
         data = json.loads(path.read_text())
     except json.JSONDecodeError as error:
-        raise StateError(f'Invalid LPR state JSON: {path}: {error}') from error
+        raise StateError(f'Invalid LRV state JSON: {path}: {error}') from error
 
     return parse_state(data)
 
@@ -247,13 +247,13 @@ def mark_comments_superseded(state, comment_ids):
 def next_comment_id(comments):
     highest = 0
     for comment in comments:
-        if not comment.id.startswith('LPR-'):
+        if not comment.id.startswith('LRV-'):
             continue
         try:
             highest = max(highest, int(comment.id[4:]))
         except ValueError:
             pass
-    return f'LPR-{highest + 1:03d}'
+    return f'LRV-{highest + 1:03d}'
 
 
 def parse_state(data):

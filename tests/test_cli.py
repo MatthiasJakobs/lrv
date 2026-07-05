@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 
 from scripts.materialize_fixture_repo import materialize
-from lpr.state import load_state
-from lpr.tui import RenderedLine, ReviewApp, minimap_buckets, minimap_viewport
+from lrv.state import load_state
+from lrv.tui import RenderedLine, ReviewApp, minimap_buckets, minimap_viewport
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,10 +23,10 @@ class DummyCurses:
 
 
 class CliTest(unittest.TestCase):
-    def run_lpr(self, repo, *args):
+    def run_lrv(self, repo, *args):
         env = os.environ.copy()
         env['PYTHONPATH'] = str(ROOT)
-        return subprocess.run([sys.executable, '-m', 'lpr', *args], cwd=repo, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return subprocess.run([sys.executable, '-m', 'lrv', *args], cwd=repo, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     def add_parser_comment(self, repo, body='Keep rejecting invalid quantities.'):
         app = ReviewApp(repo, load_state(repo))
@@ -56,20 +56,20 @@ class CliTest(unittest.TestCase):
             repo = Path(temp) / 'repo'
             materialize('python-review-basic', repo)
 
-            result = self.run_lpr(repo, 'status')
+            result = self.run_lrv(repo, 'status')
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('Changed files:\n  M src/calculator.py\n  ?? src/formatters.py\n  M src/long_review.py\n  M src/parser.py\n  M src/receipts.py\n  ?? src/reports.py\n  M src/taxes.py', result.stdout)
-            self.assertIn('  open: 2 (LPR-001, LPR-003)', result.stdout)
-            self.assertIn('  superseded: 1 (LPR-002)', result.stdout)
-            self.assertIn('  dismissed: 1 (LPR-004)', result.stdout)
+            self.assertIn('  open: 2 (LRV-001, LRV-003)', result.stdout)
+            self.assertIn('  superseded: 1 (LRV-002)', result.stdout)
+            self.assertIn('  dismissed: 1 (LRV-004)', result.stdout)
 
     def test_minimap_buckets_prioritize_comments_and_diffs(self):
         rows = [
             RenderedLine('    1 unchanged', None, kind='unchanged'),
             RenderedLine('+   2 added', None, kind='added'),
             RenderedLine('-   3 deleted', None, kind='deleted'),
-            RenderedLine('>>> comment', None, 'LPR-001'),
+            RenderedLine('>>> comment', None, 'LRV-001'),
             RenderedLine('    4 visual', None, kind='visual'),
         ]
 
@@ -86,16 +86,16 @@ class CliTest(unittest.TestCase):
             repo = Path(temp) / 'repo'
             materialize('python-review-basic', repo)
 
-            result = self.run_lpr(repo)
+            result = self.run_lrv(repo)
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('lpr review - HEAD', result.stdout)
+            self.assertIn('lrv review - HEAD', result.stdout)
             self.assertIn('Changed files:\n  M src/calculator.py\n  ?? src/formatters.py\n  M src/long_review.py\n  M src/parser.py\n  M src/receipts.py\n  ?? src/reports.py\n  M src/taxes.py', result.stdout)
             self.assertIn('--- M src/parser.py ---', result.stdout)
             self.assertIn('  40 def format_total(total):', result.stdout)
             self.assertIn('-   4         raise ValueError(\'quantity must be positive\')', result.stdout)
             self.assertIn('+   4         return 1', result.stdout)
-            self.assertIn('>>> LPR-001 [open] src/parser.py:4', result.stdout)
+            self.assertIn('>>> LRV-001 [open] src/parser.py:4', result.stdout)
             self.assertIn('>>> This silently changes invalid input instead of rejecting it.', result.stdout)
 
     def test_bare_command_accepts_repository_path_before_command(self):
@@ -103,7 +103,7 @@ class CliTest(unittest.TestCase):
             repo = Path(temp) / 'repo'
             materialize('python-review-basic', repo)
 
-            result = self.run_lpr(ROOT, str(repo))
+            result = self.run_lrv(ROOT, str(repo))
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('--- ?? src/formatters.py ---', result.stdout)
@@ -186,7 +186,7 @@ class CliTest(unittest.TestCase):
             app.open_comment_modal()
 
             self.assertEqual(app.mode, 'comments')
-            self.assertEqual(app.modal_comment_ids, ('LPR-001', 'LPR-002', 'LPR-003'))
+            self.assertEqual(app.modal_comment_ids, ('LRV-001', 'LRV-002', 'LRV-003'))
 
     def test_tui_comment_modal_state_changes_stay_visible_until_close(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -197,14 +197,14 @@ class CliTest(unittest.TestCase):
 
             app.transition_selected_modal_comment('resolved')
 
-            self.assertEqual(app.modal_comment_ids, ('LPR-001', 'LPR-002', 'LPR-003'))
+            self.assertEqual(app.modal_comment_ids, ('LRV-001', 'LRV-002', 'LRV-003'))
             self.assertEqual(app.modal_comments()[0].state, 'resolved')
             self.assertEqual(load_state(repo).comments[0].state, 'resolved')
 
             app.close_comment_modal()
             app.open_comment_modal()
 
-            self.assertEqual(app.modal_comment_ids, ('LPR-002', 'LPR-003'))
+            self.assertEqual(app.modal_comment_ids, ('LRV-002', 'LRV-003'))
 
     def test_tui_comment_modal_state_keys_toggle_to_original_state(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -238,7 +238,7 @@ class CliTest(unittest.TestCase):
 
             self.assertEqual(app.focus, 'diff')
             self.assertEqual(app.files[app.selected].path, 'src/receipts.py')
-            self.assertEqual(app.selected_file_rows()[app.diff_line].comment_id, 'LPR-003')
+            self.assertEqual(app.selected_file_rows()[app.diff_line].comment_id, 'LRV-003')
 
     def test_tui_file_focus_still_moves_between_files(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -267,7 +267,7 @@ class CliTest(unittest.TestCase):
 
             state = load_state(repo)
             comment = state.comments[-1]
-            self.assertEqual(comment.id, 'LPR-005')
+            self.assertEqual(comment.id, 'LRV-005')
             self.assertEqual(comment.state, 'open')
             self.assertEqual(comment.file, 'src/parser.py')
             self.assertEqual(comment.side, 'new')
@@ -285,16 +285,16 @@ class CliTest(unittest.TestCase):
             self.select_file(app, 'src/parser.py')
             app.focus = 'diff'
             rows = app.selected_file_rows()
-            app.diff_line = next(index for index, row in enumerate(rows) if row.comment_id == 'LPR-001')
+            app.diff_line = next(index for index, row in enumerate(rows) if row.comment_id == 'LRV-001')
 
-            original = next(comment for comment in app.state.comments if comment.id == 'LPR-001')
+            original = next(comment for comment in app.state.comments if comment.id == 'LRV-001')
             app.start_comment_edit(DummyCurses())
             self.assertEqual(app.mode, 'input')
             self.assertEqual(app.input_text, original.body)
             app.input_text = 'Still reject invalid quantities.'
             app.save_input(DummyCurses())
 
-            comment = next(comment for comment in load_state(repo).comments if comment.id == 'LPR-001')
+            comment = next(comment for comment in load_state(repo).comments if comment.id == 'LRV-001')
             self.assertEqual(comment.body, 'Still reject invalid quantities.')
             self.assertEqual(comment.line_range.start, original.line_range.start)
             self.assertEqual(comment.line_range.end, original.line_range.end)
@@ -335,7 +335,7 @@ class CliTest(unittest.TestCase):
             app.save_input(DummyCurses())
 
             comment = load_state(repo).comments[-1]
-            self.assertEqual(comment.id, 'LPR-005')
+            self.assertEqual(comment.id, 'LRV-005')
             self.assertEqual(comment.file, 'src/parser.py')
             self.assertEqual(comment.side, 'new')
             self.assertEqual(comment.line_range.start, 4)
@@ -539,13 +539,13 @@ class CliTest(unittest.TestCase):
             self.select_file(app, 'src/parser.py')
             app.focus = 'diff'
             rows = app.selected_file_rows()
-            app.diff_line = next(index for index, row in enumerate(rows) if row.text.startswith('>>> LPR-001 '))
+            app.diff_line = next(index for index, row in enumerate(rows) if row.text.startswith('>>> LRV-001 '))
 
             app.delete_selected_comment()
 
             state = load_state(repo)
-            self.assertNotIn('LPR-001', [comment.id for comment in state.comments])
-            self.assertIn('LPR-002', [comment.id for comment in state.comments])
+            self.assertNotIn('LRV-001', [comment.id for comment in state.comments])
+            self.assertIn('LRV-002', [comment.id for comment in state.comments])
 
     def test_tui_refresh_marks_comment_superseded_when_commented_hunk_changes(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -587,18 +587,18 @@ class CliTest(unittest.TestCase):
             repo = Path(temp) / 'repo'
             materialize('python-review-basic', repo)
 
-            result = self.run_lpr(repo, 'export')
+            result = self.run_lrv(repo, 'export')
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('# LPR Review', result.stdout)
-            self.assertIn('### LPR-001 src/parser.py:4', result.stdout)
+            self.assertIn('# LRV Review', result.stdout)
+            self.assertIn('### LRV-001 src/parser.py:4', result.stdout)
             self.assertIn('This silently changes invalid input instead of rejecting it.', result.stdout)
-            self.assertIn('### LPR-003 src/receipts.py:18', result.stdout)
+            self.assertIn('### LRV-003 src/receipts.py:18', result.stdout)
             self.assertIn('Receipt notes need escaping or filtering before they are printed.', result.stdout)
             self.assertIn('```diff\n@@ -1,28 +1,31 @@', result.stdout)
-            self.assertIn('Do not resolve, dismiss, or clear LPR comments.', result.stdout)
-            self.assertNotIn('LPR-002', result.stdout)
-            self.assertNotIn('LPR-004', result.stdout)
+            self.assertIn('Do not resolve, dismiss, or clear LRV comments.', result.stdout)
+            self.assertNotIn('LRV-002', result.stdout)
+            self.assertNotIn('LRV-004', result.stdout)
 
     def test_export_marks_changed_commented_hunk_superseded_before_printing(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -608,7 +608,7 @@ class CliTest(unittest.TestCase):
             parser = repo / 'src' / 'parser.py'
             parser.write_text(parser.read_text().replace("return sku or 'UNKNOWN'", "return sku or 'UNKNOWN-SKU'"))
 
-            result = self.run_lpr(repo, 'export')
+            result = self.run_lrv(repo, 'export')
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertNotIn(comment.id, result.stdout)
@@ -619,41 +619,41 @@ class CliTest(unittest.TestCase):
             repo = Path(temp) / 'repo'
             materialize('python-review-basic', repo)
 
-            result = self.run_lpr(ROOT, 'export', str(repo))
+            result = self.run_lrv(ROOT, 'export', str(repo))
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('### LPR-001 src/parser.py:4', result.stdout)
+            self.assertIn('### LRV-001 src/parser.py:4', result.stdout)
 
     def test_export_accepts_repository_path_before_command(self):
         with tempfile.TemporaryDirectory() as temp:
             repo = Path(temp) / 'repo'
             materialize('python-review-basic', repo)
 
-            result = self.run_lpr(ROOT, str(repo), 'export')
+            result = self.run_lrv(ROOT, str(repo), 'export')
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('### LPR-001 src/parser.py:4', result.stdout)
+            self.assertIn('### LRV-001 src/parser.py:4', result.stdout)
 
     def test_export_accepts_repo_option(self):
         with tempfile.TemporaryDirectory() as temp:
             repo = Path(temp) / 'repo'
             materialize('python-review-basic', repo)
 
-            result = self.run_lpr(ROOT, '--repo', str(repo), 'export')
+            result = self.run_lrv(ROOT, '--repo', str(repo), 'export')
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('### LPR-001 src/parser.py:4', result.stdout)
+            self.assertIn('### LRV-001 src/parser.py:4', result.stdout)
 
     def test_show_prints_one_comment_including_non_open_state(self):
         with tempfile.TemporaryDirectory() as temp:
             repo = Path(temp) / 'repo'
             materialize('python-review-basic', repo)
 
-            result = self.run_lpr(repo, 'show', 'LPR-002')
+            result = self.run_lrv(repo, 'show', 'LRV-002')
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('# LPR Comment', result.stdout)
-            self.assertIn('### LPR-002 src/calculator.py:12', result.stdout)
+            self.assertIn('# LRV Comment', result.stdout)
+            self.assertIn('### LRV-002 src/calculator.py:12', result.stdout)
             self.assertIn('State:\nsuperseded', result.stdout)
 
     def test_show_unknown_comment_exits_with_error(self):
@@ -661,10 +661,10 @@ class CliTest(unittest.TestCase):
             repo = Path(temp) / 'repo'
             materialize('python-review-basic', repo)
 
-            result = self.run_lpr(repo, 'show', 'LPR-999')
+            result = self.run_lrv(repo, 'show', 'LRV-999')
 
             self.assertEqual(result.returncode, 1)
-            self.assertEqual(result.stderr.strip(), 'lpr: unknown comment id: LPR-999')
+            self.assertEqual(result.stderr.strip(), 'lrv: unknown comment id: LRV-999')
 
 
 if __name__ == '__main__':

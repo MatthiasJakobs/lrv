@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-'''Create a throwaway Git repository from an lpr fixture.'''
+'''Create a throwaway Git repository from an lrv fixture.'''
 
 import argparse
 import json
@@ -32,7 +32,7 @@ def copy_tree_contents(source, destination):
 
 
 def write_review_state(repo, fixture, head):
-    state_template = fixture / 'git_state' / 'lpr' / 'state.json'
+    state_template = fixture / 'git_state' / 'lrv' / 'state.json'
     if not state_template.exists():
         return
 
@@ -42,7 +42,7 @@ def write_review_state(repo, fixture, head):
     if state.get('repo', {}).get('root') == '__REPO_ROOT__':
         state['repo']['root'] = str(repo)
 
-    state_dir = repo / '.git' / 'lpr'
+    state_dir = repo / '.git' / 'lrv'
     state_dir.mkdir(parents=True, exist_ok=True)
     (state_dir / 'state.json').write_text(json.dumps(state, indent=2, sort_keys=True) + '\n')
 
@@ -59,7 +59,7 @@ def materialize(fixture_name, destination):
     copy_tree_contents(fixture / 'base', destination)
 
     run_git(destination, 'init')
-    run_git(destination, 'config', 'user.name', 'LPR Fixture')
+    run_git(destination, 'config', 'user.name', 'LRV Fixture')
     run_git(destination, 'config', 'user.email', 'fixture@example.invalid')
     run_git(destination, 'add', '.')
     run_git(destination, 'commit', '-m', 'Fixture base')

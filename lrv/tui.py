@@ -3,8 +3,8 @@ import math
 import re
 import sys
 
-from lpr.git import changed_files, file_diff, file_lines, head_revision
-from lpr.state import HunkSnapshot, ReviewState, append_comment, load_state, mark_comments_superseded, remove_comment, save_state, set_comment_state, update_comment_body
+from lrv.git import changed_files, file_diff, file_lines, head_revision
+from lrv.state import HunkSnapshot, ReviewState, append_comment, load_state, mark_comments_superseded, remove_comment, save_state, set_comment_state, update_comment_body
 
 
 HUNK_RE = re.compile(r'^@@ -(?P<old_start>\d+)(?:,\d+)? \+(?P<new_start>\d+)(?:,\d+)? @@')
@@ -27,7 +27,7 @@ def run_tui(repo, state):
 def render_review(repo, state):
     files = changed_files(repo)
     lines = [
-        f'lpr review - HEAD {state.base_commit or head_revision(repo)}',
+        f'lrv review - HEAD {state.base_commit or head_revision(repo)}',
         '',
         'Changed files:',
     ]
@@ -849,7 +849,7 @@ class ReviewApp:
             'visual': 'VISUAL',
         }
         mode = labels.get(self.mode, 'NORMAL')
-        title = f'lpr review  {mode}  HEAD {self.state.base_commit or head_revision(self.repo)}  tab focus  space comments  v visual  i comment  o/O line  d delete  q quit  r refresh'
+        title = f'lrv review  {mode}  HEAD {self.state.base_commit or head_revision(self.repo)}  tab focus  space comments  v visual  i comment  o/O line  d delete  q quit  r refresh'
         attr = curses.color_pair(7) if self.mode in ('input', 'visual') else curses.color_pair(6)
         if attr == 0:
             attr = curses.A_REVERSE
