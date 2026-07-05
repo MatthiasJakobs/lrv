@@ -2,7 +2,7 @@ import hashlib
 import re
 import sys
 
-from lpr.git import changed_files, file_diff, head_revision
+from lpr.git import changed_files, file_diff, file_lines, head_revision
 from lpr.state import HunkSnapshot, ReviewState, append_comment, load_state, mark_comments_superseded, remove_comment, save_state, set_comment_state
 
 
@@ -63,7 +63,7 @@ def rows_for_file(repo, state, file):
 
     rendered = []
     seen = set()
-    diff_rows = diff_rows_for_file(file.path, diff_lines)
+    diff_rows = full_rows_for_file(repo, file, diff_lines)
 
     for row in diff_rows:
         for comment in matching_row_comments(comments, seen, row, 'before'):
@@ -150,9 +150,13 @@ def diff_rows_for_file(path, diff_lines):
         if line.startswith('+') and not line.startswith('+++'):
             anchor = DiffAnchor(path, 'new', new_line, hunk_by_index.get(index))
             new_line += 1
+            rendered.append(RenderedLine(line, anchor, kind='added'))
+            continue
         elif line.startswith('-') and not line.startswith('---'):
             anchor = DiffAnchor(path, 'old', old_line, hunk_by_index.get(index))
             old_line += 1
+            rendered.append(RenderedLine(line, anchor, kind='deleted'))
+            continue
         elif old_line is not None and new_line is not None:
             anchor = DiffAnchor(path, 'new', new_line, hunk_by_index.get(index))
             old_line += 1
@@ -160,6 +164,43 @@ def diff_rows_for_file(path, diff_lines):
 
         rendered.append(RenderedLine(line, anchor))
     return rendered
+
+
+def full_rows_for_file(repo, file, diff_lines):
+    lines = file_lines(repo, file)
+    if lines is None:
+        return diff_rows_for_file(file.path, diff_lines)
+
+    anchors = {}
+    kinds = {}
+    deleted_before = {}
+    pending_deleted = []
+    for row in diff_rows_for_file(file.path, diff_lines):
+        if row.anchor is None:
+            continue
+        if row.anchor.side == 'old':
+            pending_deleted.append(row)
+            continue
+        if pending_deleted:
+            deleted_before.setdefault(row.anchor.line, []).extend(pending_deleted)
+            pending_deleted = []
+        anchors[row.anchor.line] = row.anchor
+        if row.kind == 'added':
+            kinds[row.anchor.line] = 'added'
+
+    rendered = []
+    for line_number, line in enumerate(lines, start=1):
+        rendered.extend(format_deleted_row(row) for row in deleted_before.get(line_number, []))
+        kind = kinds.get(line_number, 'unchanged')
+        marker = '+' if kind == 'added' else ' '
+        rendered.append(RenderedLine(f'{marker}{line_number:>4} {line}', anchors.get(line_number), kind=kind))
+    rendered.extend(format_deleted_row(row) for row in pending_deleted)
+    return rendered
+
+
+def format_deleted_row(row):
+    text = row.text[1:] if row.text.startswith('-') else row.text
+    return RenderedLine(f'-{row.anchor.line:>4} {text}', row.anchor, row.comment_id, kind='deleted')
 
 
 def hunk_snapshots(diff_lines):
@@ -211,10 +252,11 @@ def format_inline_comment(comment):
 
 
 class RenderedLine:
-    def __init__(self, text, anchor, comment_id=None):
+    def __init__(self, text, anchor, comment_id=None, kind='normal'):
         self.text = text
         self.anchor = anchor
         self.comment_id = comment_id
+        self.kind = kind
 
 
 class DiffAnchor:
@@ -630,19 +672,19 @@ class ReviewApp:
         title = f'{file.status} {file.path}'
         attr = curses.A_BOLD | (curses.A_UNDERLINE if self.focus == 'diff' else curses.A_NORMAL)
         self.addstr(screen, 2, x, title[:width - x - 1], attr)
-        lines = self.selected_file_lines()
+        rows = self.selected_file_rows()
         visible_height = max(0, height - 5)
         if self.mode == 'input':
             visible_height = max(0, visible_height - 1)
         self.visible_diff_height = visible_height
         self.clamp_scroll(visible_height)
-        visible = lines[self.scroll:self.scroll + visible_height]
+        visible = rows[self.scroll:self.scroll + visible_height]
 
-        for index, line in enumerate(visible):
-            attr = self.line_attr(curses, line)
+        for index, row in enumerate(visible):
+            attr = self.line_attr(curses, row)
             if self.focus == 'diff' and self.scroll + index == self.diff_line:
                 attr |= curses.A_REVERSE
-            self.addstr(screen, index + 4, x, line[:width - x - 1], attr)
+            self.addstr(screen, index + 4, x, row.text[:width - x - 1], attr)
 
         progress = self.diff_progress_label()
         self.addstr(screen, height - 1, max(x, width - len(progress) - 1), progress, curses.A_BOLD)
@@ -713,9 +755,16 @@ class ReviewApp:
             return curses.color_pair(3)
         return curses.A_NORMAL
 
-    def line_attr(self, curses, line):
+    def line_attr(self, curses, row):
+        line = row.text
         if line.startswith('>>>'):
             return curses.color_pair(5) | curses.A_BOLD
+        if row.kind == 'added':
+            return curses.color_pair(2)
+        if row.kind == 'deleted':
+            return curses.color_pair(3)
+        if row.kind == 'unchanged':
+            return curses.A_DIM
         if line.startswith('+') and not line.startswith('+++'):
             return curses.color_pair(2)
         if line.startswith('-') and not line.startswith('---'):

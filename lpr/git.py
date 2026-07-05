@@ -46,6 +46,14 @@ def file_diff(repo, file):
     return run_git(repo, 'diff', '--', file.path)
 
 
+def file_lines(repo, file):
+    full_path = repo / file.path
+    try:
+        return full_path.read_text().splitlines()
+    except (FileNotFoundError, UnicodeDecodeError):
+        return None
+
+
 def untracked_file_diff(repo, path):
     full_path = repo / path
     try:

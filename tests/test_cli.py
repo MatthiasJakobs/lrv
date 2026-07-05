@@ -33,7 +33,7 @@ class CliTest(unittest.TestCase):
         app.selected = 2
         app.focus = 'diff'
         rows = app.selected_file_rows()
-        app.diff_line = next(index for index, row in enumerate(rows) if row.text == '+        return 1')
+        app.diff_line = self.row_index_ending(rows, '        return 1')
         app.start_input(1, DummyCurses())
         app.input_text = body
         app.save_input(DummyCurses())
@@ -41,6 +41,12 @@ class CliTest(unittest.TestCase):
 
     def comments_by_id(self, repo):
         return {comment.id: comment for comment in load_state(repo).comments}
+
+    def row_index_ending(self, rows, text):
+        return next(index for index, row in enumerate(rows) if row.text.endswith(text))
+
+    def line_index_ending(self, lines, text):
+        return next(index for index, line in enumerate(lines) if line.endswith(text))
 
     def test_status_lists_changed_files_and_comment_counts(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -66,6 +72,9 @@ class CliTest(unittest.TestCase):
             self.assertIn('lpr review - HEAD', result.stdout)
             self.assertIn('Changed files:\n  M src/calculator.py\n  ?? src/formatters.py\n  M src/parser.py\n  M src/receipts.py\n  ?? src/reports.py\n  M src/taxes.py', result.stdout)
             self.assertIn('--- M src/parser.py ---', result.stdout)
+            self.assertIn('  40 def format_total(total):', result.stdout)
+            self.assertIn('-   4         raise ValueError(\'quantity must be positive\')', result.stdout)
+            self.assertIn('+   4         return 1', result.stdout)
             self.assertIn('>>> LPR-001 [open] src/parser.py:4', result.stdout)
             self.assertIn('>>> This silently changes invalid input instead of rejecting it.', result.stdout)
 
@@ -78,7 +87,7 @@ class CliTest(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('--- ?? src/formatters.py ---', result.stdout)
-            self.assertIn('+def format_receipt_line(name, quantity, price):', result.stdout)
+            self.assertIn('+   1 def format_receipt_line(name, quantity, price):', result.stdout)
 
     def test_tui_tab_switches_focus_between_file_list_and_diff(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -229,7 +238,7 @@ class CliTest(unittest.TestCase):
             app.selected = 2
             app.focus = 'diff'
             rows = app.selected_file_rows()
-            app.diff_line = next(index for index, row in enumerate(rows) if row.text == '+        return 1')
+            app.diff_line = self.row_index_ending(rows, '        return 1')
 
             app.start_input(1, DummyCurses())
             self.assertEqual(app.mode, 'input')
@@ -280,7 +289,7 @@ class CliTest(unittest.TestCase):
             app.selected = 2
             app.focus = 'diff'
             rows = app.selected_file_rows()
-            app.diff_line = next(index for index, row in enumerate(rows) if row.text == '+        return 1')
+            app.diff_line = self.row_index_ending(rows, '        return 1')
             app.start_input(1, DummyCurses())
             parser = repo / 'src' / 'parser.py'
             parser.write_text(parser.read_text().replace("return sku or 'UNKNOWN'", "return sku or 'UNKNOWN-SKU'"))
@@ -299,15 +308,15 @@ class CliTest(unittest.TestCase):
             app.selected = 2
             app.focus = 'diff'
             rows = app.selected_file_rows()
-            app.diff_line = next(index for index, row in enumerate(rows) if row.text == '+        return 1')
+            app.diff_line = self.row_index_ending(rows, '        return 1')
 
             app.start_input(1, DummyCurses())
-            self.assertEqual(rows[app.diff_line].text, '+        return 1')
+            self.assertTrue(rows[app.diff_line].text.endswith('        return 1'))
             app.cancel_input(DummyCurses())
-            app.diff_line = next(index for index, row in enumerate(rows) if row.text == '+        return 1')
+            app.diff_line = self.row_index_ending(rows, '        return 1')
 
             app.start_input(-1, DummyCurses())
-            self.assertEqual(rows[app.diff_line].text, '+        return 1')
+            self.assertTrue(rows[app.diff_line].text.endswith('        return 1'))
             self.assertEqual(app.input_placement, 'before')
 
     def test_tui_o_and_O_on_total_line_place_comment_below_and_above(self):
@@ -318,16 +327,16 @@ class CliTest(unittest.TestCase):
             app.selected = 0
             app.focus = 'diff'
             rows = app.selected_file_rows()
-            app.diff_line = next(index for index, row in enumerate(rows) if row.text == '     total = 0.0')
+            app.diff_line = self.row_index_ending(rows, '    total = 0.0')
 
             app.start_input(1, DummyCurses())
-            self.assertEqual(rows[app.diff_line].text, '     total = 0.0')
+            self.assertTrue(rows[app.diff_line].text.endswith('    total = 0.0'))
             self.assertEqual(app.input_placement, 'after')
             app.cancel_input(DummyCurses())
-            app.diff_line = next(index for index, row in enumerate(rows) if row.text == '     total = 0.0')
+            app.diff_line = self.row_index_ending(rows, '    total = 0.0')
 
             app.start_input(-1, DummyCurses())
-            self.assertEqual(rows[app.diff_line].text, '     total = 0.0')
+            self.assertTrue(rows[app.diff_line].text.endswith('    total = 0.0'))
             self.assertEqual(app.input_placement, 'before')
 
     def test_tui_O_renders_saved_comment_above_current_line(self):
@@ -338,7 +347,7 @@ class CliTest(unittest.TestCase):
             app.selected = 0
             app.focus = 'diff'
             rows = app.selected_file_rows()
-            app.diff_line = next(index for index, row in enumerate(rows) if row.text == '     total = 0.0')
+            app.diff_line = self.row_index_ending(rows, '    total = 0.0')
 
             app.start_input(-1, DummyCurses())
             app.input_text = 'Initialize this closer to use.'
@@ -346,7 +355,7 @@ class CliTest(unittest.TestCase):
 
             lines = app.selected_file_lines()
             comment_index = next(index for index, line in enumerate(lines) if line == '>>> Initialize this closer to use.')
-            target_index = next(index for index, line in enumerate(lines) if line == '     total = 0.0')
+            target_index = self.line_index_ending(lines, '    total = 0.0')
             self.assertLess(comment_index, target_index)
 
     def test_tui_o_renders_saved_comment_below_current_line(self):
@@ -357,7 +366,7 @@ class CliTest(unittest.TestCase):
             app.selected = 0
             app.focus = 'diff'
             rows = app.selected_file_rows()
-            app.diff_line = next(index for index, row in enumerate(rows) if row.text == '     total = 0.0')
+            app.diff_line = self.row_index_ending(rows, '    total = 0.0')
 
             app.start_input(1, DummyCurses())
             app.input_text = 'This accumulator is visible.'
@@ -365,7 +374,7 @@ class CliTest(unittest.TestCase):
 
             lines = app.selected_file_lines()
             comment_index = next(index for index, line in enumerate(lines) if line == '>>> This accumulator is visible.')
-            target_index = next(index for index, line in enumerate(lines) if line == '     total = 0.0')
+            target_index = self.line_index_ending(lines, '    total = 0.0')
             self.assertGreater(comment_index, target_index)
 
     def test_tui_o_and_O_can_insert_at_bottom_and_top_of_changes(self):
@@ -379,12 +388,12 @@ class CliTest(unittest.TestCase):
 
             app.diff_line = 0
             app.start_input(-1, DummyCurses())
-            self.assertEqual(rows[app.diff_line].text, ' def parse_quantity(raw):')
+            self.assertTrue(rows[app.diff_line].text.endswith('def parse_quantity(raw):'))
             app.cancel_input(DummyCurses())
 
             app.diff_line = len(rows) - 1
             app.start_input(1, DummyCurses())
-            self.assertEqual(rows[app.diff_line].text, '     }')
+            self.assertTrue(rows[app.diff_line].text.endswith('    }'))
 
     def test_tui_d_deletes_selected_inline_comment(self):
         with tempfile.TemporaryDirectory() as temp:
