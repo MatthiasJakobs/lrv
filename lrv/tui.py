@@ -545,11 +545,11 @@ class ReviewApp:
     def start_visual(self):
         if not self.files:
             return
-        anchor_index = self.comment_anchor_index(1)
-        if anchor_index is None:
+        rows = self.selected_file_rows()
+        if not rows:
             self.status_message = 'No reviewable line selected.'
             return
-        rows = self.selected_file_rows()
+        anchor_index = max(0, min(len(rows) - 1, self.diff_line))
         anchor = rows[anchor_index].anchor
         if anchor is None or anchor.hunk is None:
             self.status_message = 'No reviewable line selected.'

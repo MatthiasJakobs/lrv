@@ -68,6 +68,19 @@ class CliTest(unittest.TestCase):
     def line_index_ending(self, lines, text):
         return next(index for index, line in enumerate(lines) if line.endswith(text))
 
+    def make_long_repo_with_early_change(self, repo):
+        repo.mkdir()
+        subprocess.run(['git', 'init'], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        subprocess.run(['git', 'config', 'user.email', 'test@example.com'], cwd=repo, check=True)
+        subprocess.run(['git', 'config', 'user.name', 'Test User'], cwd=repo, check=True)
+        source = repo / 'long_file.py'
+        source.write_text(''.join(f'LINE_{line} = {line}\n' for line in range(1, 301)))
+        subprocess.run(['git', 'add', 'long_file.py'], cwd=repo, check=True)
+        subprocess.run(['git', 'commit', '-m', 'base'], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        lines = source.read_text().splitlines()
+        lines[24] = 'LINE_25 = 2500'
+        source.write_text('\n'.join(lines) + '\n')
+
     def test_status_lists_changed_files_and_comment_counts(self):
         with tempfile.TemporaryDirectory() as temp:
             repo = Path(temp) / 'repo'
@@ -425,6 +438,21 @@ class CliTest(unittest.TestCase):
             rendered = app.rows_with_visual_selection(rows)
             visual_indexes = [index for index, row in enumerate(rendered) if row.kind == 'visual']
             self.assertEqual(visual_indexes, [app.visual_anchor, app.diff_line])
+
+    def test_tui_visual_mode_does_not_jump_from_unreviewable_long_file_line(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            self.make_long_repo_with_early_change(repo)
+            app = ReviewApp(repo, load_state(repo))
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = self.row_index_ending(rows, 'LINE_250 = 250')
+
+            app.start_visual()
+
+            self.assertEqual(app.mode, 'normal')
+            self.assertEqual(app.diff_line, self.row_index_ending(rows, 'LINE_250 = 250'))
+            self.assertEqual(app.status_message, 'No reviewable line selected.')
 
     def test_tui_visual_mode_rejects_mixed_old_and_new_ranges(self):
         with tempfile.TemporaryDirectory() as temp:
