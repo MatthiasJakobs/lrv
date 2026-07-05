@@ -206,6 +206,8 @@ def format_deleted_row(row):
 
 def minimap_kind(rows):
     kinds = {row.kind for row in rows}
+    if 'visual' in kinds:
+        return 'visual'
     if any(row.comment_id is not None or row.text.startswith('>>>') for row in rows):
         return 'comment'
     if 'added' in kinds and 'deleted' in kinds:
@@ -312,7 +314,10 @@ class ReviewApp:
         self.mode = 'normal'
         self.input_text = ''
         self.input_anchor = None
+        self.input_end_line = None
         self.input_placement = 'after'
+        self.visual_anchor = None
+        self.status_message = ''
         self.visible_diff_height = 10
         self.modal_comment_ids = ()
         self.modal_original_states = {}
@@ -357,6 +362,9 @@ class ReviewApp:
             if self.mode == 'comments':
                 self.handle_modal_key(key, curses)
                 continue
+            if self.mode == 'visual':
+                self.handle_visual_key(key, curses)
+                continue
             if key in (ord('q'), 27):
                 return
             if key in (ord('r'),):
@@ -385,6 +393,8 @@ class ReviewApp:
                 self.start_input(1, curses)
             elif key == ord('O'):
                 self.start_input(-1, curses)
+            elif key in (ord('v'), ord('V')):
+                self.start_visual()
             elif key == ord('d'):
                 self.delete_selected_comment()
 
@@ -400,6 +410,7 @@ class ReviewApp:
         curses.init_pair(5, curses.COLOR_YELLOW, -1)
         curses.init_pair(6, curses.COLOR_BLACK, curses.COLOR_WHITE)
         curses.init_pair(7, curses.COLOR_BLACK, curses.COLOR_YELLOW)
+        curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_CYAN)
 
     def move_selected(self, delta):
         if not self.files:
@@ -412,12 +423,18 @@ class ReviewApp:
         self.focus = 'diff' if self.focus == 'files' else 'files'
 
     def move_up(self):
+        if self.mode == 'visual':
+            self.move_visual_line(-1)
+            return
         if self.focus == 'files':
             self.move_selected(-1)
         else:
             self.move_diff_line(-1)
 
     def move_down(self):
+        if self.mode == 'visual':
+            self.move_visual_line(1)
+            return
         if self.focus == 'files':
             self.move_selected(1)
         else:
@@ -439,6 +456,121 @@ class ReviewApp:
             return
         amount = max(1, self.visible_diff_height // 2)
         self.move_diff_line(amount * direction)
+
+    def start_visual(self):
+        if not self.files:
+            return
+        anchor_index = self.comment_anchor_index(1)
+        if anchor_index is None:
+            self.status_message = 'No reviewable line selected.'
+            return
+        rows = self.selected_file_rows()
+        anchor = rows[anchor_index].anchor
+        if anchor is None or anchor.hunk is None:
+            self.status_message = 'No reviewable line selected.'
+            return
+        self.focus = 'diff'
+        self.diff_line = anchor_index
+        self.visual_anchor = anchor_index
+        self.mode = 'visual'
+        self.status_message = ''
+
+    def cancel_visual(self):
+        self.mode = 'normal'
+        self.visual_anchor = None
+
+    def handle_visual_key(self, key, curses):
+        if key == 27:
+            self.cancel_visual()
+        elif key in (curses.KEY_UP, ord('k')):
+            self.move_visual_line(-1)
+        elif key in (curses.KEY_DOWN, ord('j')):
+            self.move_visual_line(1)
+        elif key in (curses.KEY_PPAGE, ord('b')):
+            self.page_diff(-10)
+        elif key in (curses.KEY_NPAGE, ord('f')):
+            self.page_diff(10)
+        elif key == CTRL_D:
+            self.half_page_diff(1)
+        elif key == CTRL_U:
+            self.half_page_diff(-1)
+        elif key == ord('i'):
+            self.start_visual_input(curses)
+
+    def move_visual_line(self, delta):
+        rows = self.selected_file_rows()
+        if not rows:
+            return
+        index = max(0, min(len(rows) - 1, self.diff_line)) + delta
+        while 0 <= index < len(rows):
+            if rows[index].anchor is not None:
+                self.diff_line = index
+                return
+            index += delta
+
+    def start_visual_input(self, curses):
+        selection = self.visual_selection()
+        if selection is None:
+            return
+        anchor, end_line = selection
+        self.input_anchor = anchor
+        self.input_end_line = end_line
+        self.input_text = ''
+        self.input_placement = 'after'
+        self.mode = 'input'
+        self.set_cursor(curses, 1)
+
+    def visual_selection(self):
+        rows = self.selected_file_rows()
+        if self.visual_anchor is None or not rows:
+            self.status_message = 'No visual selection.'
+            return None
+        start = max(0, min(len(rows) - 1, self.visual_anchor))
+        end = max(0, min(len(rows) - 1, self.diff_line))
+        if start > end:
+            start, end = end, start
+        anchors = [row.anchor for row in rows[start:end + 1] if row.anchor is not None]
+        if not anchors:
+            self.status_message = 'Selection has no reviewable lines.'
+            return None
+        first = anchors[0]
+        if first.hunk is None:
+            self.status_message = 'Selection must be inside a hunk.'
+            return None
+        for anchor in anchors:
+            if anchor.hunk is None or anchor.hunk.header != first.hunk.header or anchor.hunk.hash != first.hunk.hash:
+                self.status_message = 'Range comments cannot cross hunks.'
+                return None
+            if anchor.side != first.side:
+                self.status_message = 'Range comments cannot mix old and new lines.'
+                return None
+        lines = sorted(anchor.line for anchor in anchors)
+        expected = list(range(lines[0], lines[-1] + 1))
+        if lines != expected:
+            self.status_message = 'Range comments must target contiguous lines.'
+            return None
+        self.status_message = ''
+        return DiffAnchor(first.file, first.side, lines[0], first.hunk), lines[-1]
+
+    def visual_row_indexes(self):
+        rows = self.selected_file_rows()
+        if self.mode not in ('visual', 'input') or self.visual_anchor is None or not rows:
+            return set()
+        start = max(0, min(len(rows) - 1, self.visual_anchor))
+        end = max(0, min(len(rows) - 1, self.diff_line))
+        if start > end:
+            start, end = end, start
+        return set(range(start, end + 1))
+
+    def rows_with_visual_selection(self, rows):
+        indexes = self.visual_row_indexes()
+        if not indexes:
+            return rows
+        rendered = []
+        for index, row in enumerate(rows):
+            kind = 'visual' if index in indexes and row.anchor is not None else row.kind
+            rendered.append(RenderedLine(row.text, row.anchor, row.comment_id, kind))
+        return rendered
 
     def diff_progress_label(self):
         lines = self.selected_file_lines()
@@ -602,7 +734,9 @@ class ReviewApp:
         self.mode = 'normal'
         self.input_text = ''
         self.input_anchor = None
+        self.input_end_line = None
         self.input_placement = 'after'
+        self.visual_anchor = None
         self.set_cursor(curses, 0)
 
     def save_input(self, curses):
@@ -619,6 +753,7 @@ class ReviewApp:
                 anchor.hunk,
                 body,
                 placement=self.input_placement,
+                end_line=self.input_end_line,
             )
             save_state(self.repo, self.state)
             self.cancel_input(curses)
@@ -674,10 +809,11 @@ class ReviewApp:
         labels = {
             'input': 'INPUT',
             'comments': 'COMMENTS',
+            'visual': 'VISUAL',
         }
         mode = labels.get(self.mode, 'NORMAL')
-        title = f'lpr review  {mode}  HEAD {self.state.base_commit or head_revision(self.repo)}  tab focus  space comments  o/O comment  d delete  q quit  r refresh'
-        attr = curses.color_pair(7) if self.mode == 'input' else curses.color_pair(6)
+        title = f'lpr review  {mode}  HEAD {self.state.base_commit or head_revision(self.repo)}  tab focus  space comments  v visual  i comment  o/O line  d delete  q quit  r refresh'
+        attr = curses.color_pair(7) if self.mode in ('input', 'visual') else curses.color_pair(6)
         if attr == 0:
             attr = curses.A_REVERSE
         self.addstr(screen, 0, 0, title[:width - 1].ljust(max(0, width - 1)), attr)
@@ -706,12 +842,13 @@ class ReviewApp:
         attr = curses.A_BOLD | (curses.A_UNDERLINE if self.focus == 'diff' else curses.A_NORMAL)
         self.addstr(screen, 2, x, title[:width - x - 1], attr)
         rows = self.selected_file_rows()
+        display_rows = self.rows_with_visual_selection(rows)
         visible_height = max(0, height - 5)
         if self.mode == 'input':
             visible_height = max(0, visible_height - 1)
         self.visible_diff_height = visible_height
         self.clamp_scroll(visible_height)
-        visible = rows[self.scroll:self.scroll + visible_height]
+        visible = display_rows[self.scroll:self.scroll + visible_height]
         minimap_x = self.minimap_x(width, x)
         text_width = minimap_x - x - 1 if minimap_x is not None else width - x - 1
 
@@ -722,10 +859,10 @@ class ReviewApp:
             self.addstr(screen, index + 4, x, row.text[:text_width], attr)
 
         if minimap_x is not None:
-            self.draw_minimap(screen, rows, 4, minimap_x, visible_height, curses)
+            self.draw_minimap(screen, display_rows, 4, minimap_x, visible_height, curses)
 
-        progress = self.diff_progress_label()
-        self.addstr(screen, height - 1, max(x, width - len(progress) - 1), progress, curses.A_BOLD)
+        footer = self.status_message or self.diff_progress_label()
+        self.addstr(screen, height - 1, x, footer[:max(0, width - x - 1)], curses.A_BOLD)
 
     def minimap_x(self, width, main_x):
         if width - main_x < 44:
@@ -742,6 +879,8 @@ class ReviewApp:
             self.addstr(screen, y + index, x + 1, marker, self.minimap_attr(curses, kind))
 
     def minimap_attr(self, curses, kind):
+        if kind == 'visual':
+            return curses.color_pair(8) | curses.A_BOLD
         if kind == 'comment':
             return curses.color_pair(5) | curses.A_BOLD
         if kind == 'mixed':
@@ -822,6 +961,8 @@ class ReviewApp:
         line = row.text
         if line.startswith('>>>'):
             return curses.color_pair(5) | curses.A_BOLD
+        if row.kind == 'visual':
+            return curses.color_pair(8) | curses.A_BOLD
         if row.kind == 'added':
             return curses.color_pair(2)
         if row.kind == 'deleted':

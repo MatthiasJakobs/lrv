@@ -109,14 +109,15 @@ def comment_to_data(comment):
     }
 
 
-def append_comment(state, file, side, line, hunk, body, placement='after'):
+def append_comment(state, file, side, line, hunk, body, placement='after', end_line=None):
     now = utc_now()
+    end = line if end_line is None else end_line
     comment = Comment(
         id=next_comment_id(state.comments),
         state='open',
         file=file,
         side=side,
-        line_range=LineRange(start=line, end=line),
+        line_range=LineRange(start=min(line, end), end=max(line, end)),
         hunk=hunk,
         body=body,
         created_at=now,

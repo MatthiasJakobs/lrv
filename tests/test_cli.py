@@ -70,9 +70,10 @@ class CliTest(unittest.TestCase):
             RenderedLine('+   2 added', None, kind='added'),
             RenderedLine('-   3 deleted', None, kind='deleted'),
             RenderedLine('>>> comment', None, 'LPR-001'),
+            RenderedLine('    4 visual', None, kind='visual'),
         ]
 
-        self.assertEqual(minimap_buckets(rows, 4), ['unchanged', 'added', 'deleted', 'comment'])
+        self.assertEqual(minimap_buckets(rows, 5), ['unchanged', 'added', 'deleted', 'comment', 'visual'])
         self.assertEqual(minimap_buckets(rows[1:3], 1), ['mixed'])
 
     def test_minimap_viewport_maps_scroll_to_compressed_rows(self):
@@ -275,6 +276,82 @@ class CliTest(unittest.TestCase):
             self.assertEqual(comment.placement, 'after')
             self.assertEqual(comment.hunk.header, '@@ -1,28 +1,31 @@')
             self.assertIn('+        return 1', comment.hunk.snapshot)
+
+    def test_tui_visual_mode_comments_selected_line_range(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            self.select_file(app, 'src/parser.py')
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = self.row_index_ending(rows, '        return 1')
+
+            app.start_visual()
+            app.move_down()
+            app.start_visual_input(DummyCurses())
+            self.assertEqual(app.mode, 'input')
+            app.input_text = 'Keep these cases explicit.'
+            app.save_input(DummyCurses())
+
+            comment = load_state(repo).comments[-1]
+            self.assertEqual(comment.id, 'LPR-005')
+            self.assertEqual(comment.file, 'src/parser.py')
+            self.assertEqual(comment.side, 'new')
+            self.assertEqual(comment.line_range.start, 4)
+            self.assertEqual(comment.line_range.end, 5)
+            self.assertEqual(comment.body, 'Keep these cases explicit.')
+
+    def test_tui_visual_mode_marks_selected_rows_for_display(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            self.select_file(app, 'src/parser.py')
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = self.row_index_ending(rows, '        return 1')
+
+            app.start_visual()
+            app.move_down()
+
+            rendered = app.rows_with_visual_selection(rows)
+            visual_indexes = [index for index, row in enumerate(rendered) if row.kind == 'visual']
+            self.assertEqual(visual_indexes, [app.visual_anchor, app.diff_line])
+
+    def test_tui_visual_mode_rejects_mixed_old_and_new_ranges(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            self.select_file(app, 'src/parser.py')
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = self.row_index_ending(rows, '        raise ValueError(\'quantity must be positive\')')
+
+            app.start_visual()
+            app.move_down()
+            app.start_visual_input(DummyCurses())
+
+            self.assertEqual(app.mode, 'visual')
+            self.assertEqual(app.status_message, 'Range comments cannot mix old and new lines.')
+
+    def test_tui_visual_mode_rejects_cross_hunk_ranges(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            self.select_file(app, 'src/receipts.py')
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = next(index for index, row in enumerate(rows) if row.anchor is not None and row.anchor.line == 6)
+
+            app.start_visual()
+            app.diff_line = self.row_index_ending(rows, '        if quantity == 0:')
+            app.start_visual_input(DummyCurses())
+
+            self.assertEqual(app.mode, 'visual')
+            self.assertEqual(app.status_message, 'Range comments cannot cross hunks.')
 
     def test_tui_insert_mode_keeps_cursor_position_after_saving_comment(self):
         with tempfile.TemporaryDirectory() as temp:
