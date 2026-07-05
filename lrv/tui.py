@@ -6,8 +6,20 @@ import sys
 from lrv.git import changed_files, file_diff, file_lines, head_revision
 from lrv.state import HunkSnapshot, ReviewState, append_comment, load_state, mark_comments_superseded, remove_comment, save_state, set_comment_state, update_comment_body
 
+try:
+    from pygments import lex
+    from pygments.lexers import get_lexer_for_filename
+    from pygments.token import Comment, Error, Generic, Keyword, Literal, Name, Number, Operator, Punctuation, String
+    from pygments.util import ClassNotFound
+except Exception:
+    lex = None
+    get_lexer_for_filename = None
+    Comment = Error = Generic = Keyword = Literal = Name = Number = Operator = Punctuation = String = None
+    ClassNotFound = Exception
+
 
 HUNK_RE = re.compile(r'^@@ -(?P<old_start>\d+)(?:,\d+)? \+(?P<new_start>\d+)(?:,\d+)? @@')
+SOURCE_ROW_RE = re.compile(r'^( [ 0-9]+ )')
 CTRL_D = 4
 CTRL_U = 21
 
@@ -286,6 +298,63 @@ def format_inline_comment(comment):
     return lines
 
 
+def source_row_parts(row):
+    if row.comment_id is not None or row.kind != 'unchanged':
+        return None
+    match = SOURCE_ROW_RE.match(row.text)
+    if not match:
+        return None
+    return match.group(1), row.text[match.end():]
+
+
+def syntax_token_kind(token):
+    if Comment is not None and token in Comment:
+        return 'comment'
+    if Error is not None and token in Error:
+        return 'error'
+    if Keyword is not None and token in Keyword:
+        return 'keyword'
+    if String is not None and token in String:
+        return 'string'
+    if Number is not None and token in Number:
+        return 'number'
+    if Name is not None and token in Name.Decorator:
+        return 'decorator'
+    if Name is not None and token in Name.Function:
+        return 'function'
+    if Name is not None and token in Name.Class:
+        return 'class'
+    if Name is not None and token in Name.Builtin:
+        return 'builtin'
+    if Name is not None and token in Name.Constant:
+        return 'constant'
+    if Name is not None and token in Name.Namespace:
+        return 'namespace'
+    if Name is not None and token in Name.Attribute:
+        return 'attribute'
+    if Name is not None and token in Name.Variable:
+        return 'variable'
+    if Operator is not None and token in Operator:
+        return 'operator'
+    if Punctuation is not None and token in Punctuation:
+        return 'punctuation'
+    if Generic is not None and token in Generic:
+        return 'generic'
+    if Literal is not None and token in Literal:
+        return 'literal'
+    return None
+
+
+def syntax_spans(path, code):
+    if lex is None or get_lexer_for_filename is None:
+        return [(code, None)]
+    try:
+        lexer = get_lexer_for_filename(path)
+    except ClassNotFound:
+        return [(code, None)]
+    return [(text, syntax_token_kind(token)) for token, text in lex(code, lexer) if text]
+
+
 class RenderedLine:
     def __init__(self, text, anchor, comment_id=None, kind='normal'):
         self.text = text
@@ -324,6 +393,7 @@ class ReviewApp:
         self.modal_original_states = {}
         self.modal_index = 0
         self.modal_scroll = 0
+        self.syntax_colors = False
         self.reload()
 
     def reload(self, target_anchor=None, target_scroll=None):
@@ -414,6 +484,18 @@ class ReviewApp:
         curses.init_pair(6, curses.COLOR_BLACK, curses.COLOR_WHITE)
         curses.init_pair(7, curses.COLOR_BLACK, curses.COLOR_YELLOW)
         curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_CYAN)
+        self.init_color_pair(curses, 9, curses.COLOR_CYAN, -1)
+        self.init_color_pair(curses, 10, curses.COLOR_YELLOW, -1)
+        self.init_color_pair(curses, 11, curses.COLOR_MAGENTA if curses.COLORS > 7 else curses.COLOR_CYAN, -1)
+        self.init_color_pair(curses, 12, curses.COLOR_BLUE, -1)
+        self.init_color_pair(curses, 13, curses.COLOR_WHITE, -1)
+        self.syntax_colors = lex is not None
+
+    def init_color_pair(self, curses, pair, foreground, background):
+        try:
+            curses.init_pair(pair, foreground, background)
+        except Exception:
+            pass
 
     def move_selected(self, delta):
         if not self.files:
@@ -891,8 +973,11 @@ class ReviewApp:
 
         for index, row in enumerate(visible):
             attr = self.line_attr(curses, row)
+            selected = self.focus == 'diff' and self.scroll + index == self.diff_line
+            if self.draw_source_row(screen, index + 4, x, row, file.path, text_width, attr, selected, curses):
+                continue
             if self.focus == 'diff' and self.scroll + index == self.diff_line:
-                attr |= curses.A_REVERSE
+                attr |= self.current_line_attr(curses)
             self.addstr(screen, index + 4, x, row.text[:text_width], attr)
 
         if minimap_x is not None:
@@ -1005,7 +1090,7 @@ class ReviewApp:
         if row.kind == 'deleted':
             return curses.color_pair(3)
         if row.kind == 'unchanged':
-            return curses.A_DIM
+            return curses.A_NORMAL
         if line.startswith('+') and not line.startswith('+++'):
             return curses.color_pair(2)
         if line.startswith('-') and not line.startswith('---'):
@@ -1013,6 +1098,60 @@ class ReviewApp:
         if line.startswith('@@'):
             return curses.color_pair(4)
         return curses.A_NORMAL
+
+    def current_line_attr(self, curses):
+        return curses.A_BOLD | curses.A_UNDERLINE
+
+    def draw_source_row(self, screen, y, x, row, path, width, base_attr, selected, curses):
+        if not getattr(self, 'syntax_colors', False):
+            return False
+        parts = source_row_parts(row)
+        if parts is None or width <= 0:
+            return False
+        prefix, code = parts
+        selected_attr = self.current_line_attr(curses) if selected else curses.A_NORMAL
+        attr = base_attr | selected_attr
+        self.addstr(screen, y, x, prefix[:width], attr)
+        column = x + min(len(prefix), width)
+        remaining = width - min(len(prefix), width)
+        if remaining <= 0:
+            return True
+        for text, kind in syntax_spans(path, code):
+            if remaining <= 0:
+                break
+            value = text[:remaining]
+            span_attr = self.syntax_attr(curses, kind, base_attr)
+            if selected:
+                span_attr |= selected_attr
+            self.addstr(screen, y, column, value, span_attr)
+            column += len(value)
+            remaining -= len(value)
+        return True
+
+    def syntax_attr(self, curses, kind, base_attr):
+        if kind == 'comment':
+            return curses.A_DIM
+        if kind == 'error':
+            return curses.color_pair(3) | curses.A_BOLD
+        if kind == 'keyword':
+            return curses.color_pair(9) | curses.A_BOLD
+        if kind == 'string':
+            return curses.color_pair(10)
+        if kind in ('number', 'literal'):
+            return curses.color_pair(11)
+        if kind in ('function', 'class', 'decorator'):
+            return curses.color_pair(12) | curses.A_BOLD
+        if kind in ('builtin', 'constant'):
+            return curses.color_pair(11) | curses.A_BOLD
+        if kind in ('namespace', 'attribute'):
+            return curses.color_pair(9)
+        if kind == 'variable':
+            return curses.color_pair(13)
+        if kind in ('operator', 'punctuation'):
+            return curses.color_pair(13) | curses.A_BOLD
+        if kind == 'generic':
+            return curses.color_pair(4)
+        return base_attr
 
     def addstr(self, screen, y, x, value, attr=0):
         try:

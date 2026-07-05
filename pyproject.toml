@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "Local review tool for coding-agent changes."
 requires-python = ">=3.11"
 
+[project.optional-dependencies]
+highlight = ['pygments']
+
 [project.scripts]
 lrv = "lrv.cli:main"
 

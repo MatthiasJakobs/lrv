@@ -7,7 +7,8 @@ from pathlib import Path
 
 from scripts.materialize_fixture_repo import materialize
 from lrv.state import load_state
-from lrv.tui import RenderedLine, ReviewApp, minimap_buckets, minimap_viewport
+import lrv.tui as tui
+from lrv.tui import RenderedLine, ReviewApp, minimap_buckets, minimap_viewport, source_row_parts, syntax_token_kind
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,9 +18,25 @@ class DummyCurses:
     KEY_ENTER = 10
     KEY_UP = 259
     KEY_DOWN = 258
+    A_NORMAL = 0
+    A_BOLD = 1
+    A_REVERSE = 2
+    A_DIM = 4
+    A_UNDERLINE = 8
 
     def curs_set(self, visible):
         self.cursor_visible = visible
+
+    def color_pair(self, pair):
+        return pair * 16
+
+
+class FakeScreen:
+    def __init__(self):
+        self.calls = []
+
+    def addstr(self, y, x, value, attr=0):
+        self.calls.append((y, x, value, attr))
 
 
 class CliTest(unittest.TestCase):
@@ -108,6 +125,56 @@ class CliTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('--- ?? src/formatters.py ---', result.stdout)
             self.assertIn('+   1 def format_receipt_line(name, quantity, price):', result.stdout)
+
+    def test_source_row_parts_extracts_only_unchanged_code_rows(self):
+        self.assertEqual(source_row_parts(RenderedLine('   40 def format_total(total):', None, kind='unchanged')), ('   40 ', 'def format_total(total):'))
+        self.assertIsNone(source_row_parts(RenderedLine('+   4         return 1', None, kind='added')))
+        self.assertIsNone(source_row_parts(RenderedLine('-   4         raise ValueError()', None, kind='deleted')))
+        self.assertIsNone(source_row_parts(RenderedLine('>>> LRV-001 [open]', None, 'LRV-001')))
+        self.assertIsNone(source_row_parts(RenderedLine('   40 def format_total(total):', None, kind='visual')))
+
+    def test_draw_source_row_draws_syntax_spans_for_unchanged_rows(self):
+        app = ReviewApp.__new__(ReviewApp)
+        app.syntax_colors = True
+        screen = FakeScreen()
+        original = tui.syntax_spans
+        tui.syntax_spans = lambda path, code: [('def', 'keyword'), (' ', None), ('format_total', 'function')]
+        try:
+            row = RenderedLine('   40 def format_total', None, kind='unchanged')
+
+            rendered = app.draw_source_row(screen, 3, 10, row, 'src/calculator.py', 80, DummyCurses.A_NORMAL, False, DummyCurses())
+        finally:
+            tui.syntax_spans = original
+
+        self.assertTrue(rendered)
+        self.assertEqual(screen.calls[0], (3, 10, '   40 ', DummyCurses.A_NORMAL))
+        self.assertEqual(screen.calls[1], (3, 16, 'def', 9 * 16 | DummyCurses.A_BOLD))
+        self.assertEqual(screen.calls[2], (3, 19, ' ', DummyCurses.A_NORMAL))
+        self.assertEqual(screen.calls[3], (3, 20, 'format_total', 12 * 16 | DummyCurses.A_BOLD))
+
+    def test_current_line_attr_is_subtle(self):
+        app = ReviewApp.__new__(ReviewApp)
+
+        self.assertEqual(app.line_attr(DummyCurses(), RenderedLine('   40 code', None, kind='unchanged')), DummyCurses.A_NORMAL)
+        self.assertEqual(app.current_line_attr(DummyCurses()), DummyCurses.A_BOLD | DummyCurses.A_UNDERLINE)
+
+    def test_syntax_token_kind_maps_common_pygments_tokens(self):
+        if tui.Name is None:
+            self.skipTest('pygments is not installed')
+
+        self.assertEqual(syntax_token_kind(tui.Name.Builtin), 'builtin')
+        self.assertEqual(syntax_token_kind(tui.Name.Attribute), 'attribute')
+        self.assertEqual(syntax_token_kind(tui.Name.Decorator), 'decorator')
+        self.assertEqual(syntax_token_kind(tui.Operator), 'operator')
+        self.assertEqual(syntax_token_kind(tui.Punctuation), 'punctuation')
+
+    def test_draw_source_row_skips_changed_and_comment_rows(self):
+        app = ReviewApp.__new__(ReviewApp)
+        screen = FakeScreen()
+
+        self.assertFalse(app.draw_source_row(screen, 0, 0, RenderedLine('+   4 return 1', None, kind='added'), 'src/parser.py', 80, 0, False, DummyCurses()))
+        self.assertFalse(app.draw_source_row(screen, 0, 0, RenderedLine('>>> comment', None, 'LRV-001'), 'src/parser.py', 80, 0, False, DummyCurses()))
+        self.assertEqual(screen.calls, [])
 
     def test_tui_tab_switches_focus_between_file_list_and_diff(self):
         with tempfile.TemporaryDirectory() as temp:
