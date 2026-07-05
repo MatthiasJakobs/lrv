@@ -248,6 +248,30 @@ class CliTest(unittest.TestCase):
             self.assertEqual(comment.hunk.header, '@@ -1,28 +1,31 @@')
             self.assertIn('+        return 1', comment.hunk.snapshot)
 
+    def test_tui_insert_mode_keeps_cursor_position_after_saving_comment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            app.selected = 2
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = len(rows) - 1
+            app.scroll = max(1, len(rows) - 6)
+            app.start_input(1, DummyCurses())
+            anchor = app.input_anchor
+            scroll = app.scroll
+
+            app.input_text = 'Keep this visible.'
+            app.save_input(DummyCurses())
+
+            selected = app.selected_file_rows()[app.diff_line]
+            self.assertEqual(app.scroll, scroll)
+            self.assertIsNotNone(selected.anchor)
+            self.assertEqual(selected.anchor.file, anchor.file)
+            self.assertEqual(selected.anchor.side, anchor.side)
+            self.assertEqual(selected.anchor.line, anchor.line)
+
     def test_tui_insert_mode_marks_comment_superseded_when_hunk_changes_before_save(self):
         with tempfile.TemporaryDirectory() as temp:
             repo = Path(temp) / 'repo'

@@ -197,6 +197,12 @@ def comment_matches_line(comment, old_line, new_line):
     return comment.line_range.start <= target <= comment.line_range.end
 
 
+def row_matches_anchor(row, anchor):
+    if row.anchor is None:
+        return False
+    return row.anchor.file == anchor.file and row.anchor.side == anchor.side and row.anchor.line == anchor.line
+
+
 def format_inline_comment(comment):
     lines = [f'>>> {comment.id} [{comment.state}] {comment.location()}']
     for body_line in comment.body.splitlines():
@@ -239,14 +245,26 @@ class ReviewApp:
         self.modal_scroll = 0
         self.reload()
 
-    def reload(self):
+    def reload(self, target_anchor=None, target_scroll=None):
+        selected_path = self.files[self.selected].path if self.files and self.selected < len(self.files) else None
         self.state = load_state(self.repo)
         self.state = refresh_superseded_comments(self.repo, self.state)
         self.files = changed_files(self.repo)
+        if selected_path is not None:
+            for index, file in enumerate(self.files):
+                if file.path == selected_path:
+                    self.selected = index
+                    break
         if self.selected >= len(self.files):
             self.selected = max(0, len(self.files) - 1)
-        self.scroll = 0
-        self.diff_line = 0
+        if target_scroll is None:
+            self.scroll = 0
+        else:
+            self.scroll = target_scroll
+        if target_anchor is None:
+            self.diff_line = 0
+        else:
+            self.diff_line = self.anchor_row_index(target_anchor)
 
     def run(self, screen):
         import curses
@@ -451,6 +469,13 @@ class ReviewApp:
                 return index
         return 0
 
+    def anchor_row_index(self, anchor):
+        rows = self.selected_file_rows()
+        for index, row in enumerate(rows):
+            if row_matches_anchor(row, anchor):
+                return index
+        return max(0, min(len(rows) - 1, self.diff_line))
+
     def start_input(self, direction, curses):
         if not self.files:
             return
@@ -508,19 +533,21 @@ class ReviewApp:
     def save_input(self, curses):
         body = self.input_text.strip()
         if body:
+            anchor = self.input_anchor
+            scroll = self.scroll
             state = self.state_with_base_commit()
             self.state = append_comment(
                 state,
-                self.input_anchor.file,
-                self.input_anchor.side,
-                self.input_anchor.line,
-                self.input_anchor.hunk,
+                anchor.file,
+                anchor.side,
+                anchor.line,
+                anchor.hunk,
                 body,
                 placement=self.input_placement,
             )
             save_state(self.repo, self.state)
             self.cancel_input(curses)
-            self.reload()
+            self.reload(target_anchor=anchor, target_scroll=scroll)
             return
         self.cancel_input(curses)
 
