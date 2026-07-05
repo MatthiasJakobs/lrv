@@ -3,9 +3,9 @@ import sys
 from pathlib import Path
 
 from lrv.export import render_export, render_single_comment
-from lrv.git import GitError, changed_files, head_revision, repo_root
+from lrv.git import GitError, head_revision, repo_root
 from lrv.state import StateError, comments_by_state, load_state
-from lrv.tui import refresh_superseded_comments, run_tui
+from lrv.tui import refresh_superseded_comments, review_files, run_tui
 
 
 def main(argv=None):
@@ -62,7 +62,7 @@ def command_status(repo, state, args):
     print(f'Base: HEAD {state.base_commit or head_revision(repo)}')
     print('')
     print('Changed files:')
-    files = changed_files(repo)
+    files = review_files(repo, state)
     if files:
         for file in files:
             print(f'  {file.status} {file.path}')

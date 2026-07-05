@@ -8,6 +8,7 @@
     {
       "id": "LRV-001",
       "state": "open",
+      "anchorKind": "hunk",
       "file": "src/parser.py",
       "side": "new",
       "lineRange": {
@@ -27,6 +28,7 @@
     {
       "id": "LRV-002",
       "state": "superseded",
+      "anchorKind": "hunk",
       "file": "src/calculator.py",
       "side": "new",
       "lineRange": {
@@ -46,6 +48,7 @@
     {
       "id": "LRV-003",
       "state": "open",
+      "anchorKind": "hunk",
       "file": "src/receipts.py",
       "side": "new",
       "lineRange": {
@@ -65,6 +68,7 @@
     {
       "id": "LRV-004",
       "state": "dismissed",
+      "anchorKind": "hunk",
       "file": "src/taxes.py",
       "side": "new",
       "lineRange": {

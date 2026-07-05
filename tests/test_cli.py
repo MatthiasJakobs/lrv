@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from scripts.materialize_fixture_repo import materialize
-from lrv.state import load_state
+from lrv.state import Comment, FileAnchor, LineRange, ReviewState, load_state, save_state
 import lrv.tui as tui
 from lrv.tui import RenderedLine, ReviewApp, minimap_buckets, minimap_viewport, source_row_parts, syntax_token_kind
 
@@ -439,7 +439,7 @@ class CliTest(unittest.TestCase):
             visual_indexes = [index for index, row in enumerate(rendered) if row.kind == 'visual']
             self.assertEqual(visual_indexes, [app.visual_anchor, app.diff_line])
 
-    def test_tui_visual_mode_does_not_jump_from_unreviewable_long_file_line(self):
+    def test_tui_visual_mode_starts_on_unchanged_line_outside_hunk(self):
         with tempfile.TemporaryDirectory() as temp:
             repo = Path(temp) / 'repo'
             self.make_long_repo_with_early_change(repo)
@@ -450,9 +450,70 @@ class CliTest(unittest.TestCase):
 
             app.start_visual()
 
-            self.assertEqual(app.mode, 'normal')
+            self.assertEqual(app.mode, 'visual')
             self.assertEqual(app.diff_line, self.row_index_ending(rows, 'LINE_250 = 250'))
-            self.assertEqual(app.status_message, 'No reviewable line selected.')
+            self.assertEqual(app.status_message, '')
+
+    def test_tui_insert_mode_saves_file_anchor_comment_outside_hunk(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            self.make_long_repo_with_early_change(repo)
+            app = ReviewApp(repo, load_state(repo))
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = self.row_index_ending(rows, 'LINE_250 = 250')
+
+            app.start_input(1, DummyCurses())
+            app.input_text = 'Check this unchanged constant too.'
+            app.save_input(DummyCurses())
+
+            comment = load_state(repo).comments[-1]
+            self.assertEqual(comment.anchor_kind, 'file')
+            self.assertEqual(comment.file, 'long_file.py')
+            self.assertEqual(comment.side, 'new')
+            self.assertEqual(comment.line_range.start, 250)
+            self.assertEqual(comment.line_range.end, 250)
+            self.assertEqual(comment.file_anchor.snapshot, 'LINE_250 = 250')
+            self.assertEqual(comment.file_anchor.prefix, ('LINE_247 = 247', 'LINE_248 = 248', 'LINE_249 = 249'))
+            self.assertEqual(comment.file_anchor.suffix, ('LINE_251 = 251', 'LINE_252 = 252', 'LINE_253 = 253'))
+
+    def test_tui_visual_mode_saves_file_anchor_range_outside_hunk(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            self.make_long_repo_with_early_change(repo)
+            app = ReviewApp(repo, load_state(repo))
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = self.row_index_ending(rows, 'LINE_250 = 250')
+
+            app.start_visual()
+            app.move_down()
+            app.move_down()
+            app.start_visual_input(DummyCurses())
+            app.input_text = 'These unchanged constants move together.'
+            app.save_input(DummyCurses())
+
+            comment = load_state(repo).comments[-1]
+            self.assertEqual(comment.anchor_kind, 'file')
+            self.assertEqual(comment.line_range.start, 250)
+            self.assertEqual(comment.line_range.end, 252)
+            self.assertEqual(comment.file_anchor.snapshot, 'LINE_250 = 250\nLINE_251 = 251\nLINE_252 = 252')
+
+    def test_tui_visual_mode_rejects_mixed_hunk_and_file_anchor_ranges(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            self.make_long_repo_with_early_change(repo)
+            app = ReviewApp(repo, load_state(repo))
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = self.row_index_ending(rows, 'LINE_25 = 2500')
+
+            app.start_visual()
+            app.diff_line = self.row_index_ending(rows, 'LINE_250 = 250')
+            app.start_visual_input(DummyCurses())
+
+            self.assertEqual(app.mode, 'visual')
+            self.assertEqual(app.status_message, 'Range comments cannot mix hunk and file lines.')
 
     def test_tui_visual_mode_rejects_mixed_old_and_new_ranges(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -486,7 +547,7 @@ class CliTest(unittest.TestCase):
             app.start_visual_input(DummyCurses())
 
             self.assertEqual(app.mode, 'visual')
-            self.assertEqual(app.status_message, 'Range comments cannot cross hunks.')
+            self.assertEqual(app.status_message, 'Range comments cannot mix hunk and file lines.')
 
     def test_tui_insert_mode_keeps_cursor_position_after_saving_comment(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -677,6 +738,136 @@ class CliTest(unittest.TestCase):
 
             self.assertEqual(self.comments_by_id(repo)[comment.id].state, 'superseded')
 
+    def test_tui_refresh_keeps_file_anchor_comment_open_when_original_range_matches(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            self.make_long_repo_with_early_change(repo)
+            app = ReviewApp(repo, load_state(repo))
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = self.row_index_ending(rows, 'LINE_250 = 250')
+            app.start_input(1, DummyCurses())
+            app.input_text = 'Keep tracking this line.'
+            app.save_input(DummyCurses())
+            comment = load_state(repo).comments[-1]
+            source = repo / 'long_file.py'
+            source.write_text(source.read_text().replace('LINE_260 = 260', 'LINE_260 = 2600'))
+
+            ReviewApp(repo, load_state(repo)).reload()
+
+            refreshed = self.comments_by_id(repo)[comment.id]
+            self.assertEqual(refreshed.state, 'open')
+            self.assertEqual(refreshed.line_range.start, 250)
+
+    def test_tui_refresh_relocates_file_anchor_comment_when_snapshot_moves_uniquely(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            self.make_long_repo_with_early_change(repo)
+            app = ReviewApp(repo, load_state(repo))
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = self.row_index_ending(rows, 'LINE_250 = 250')
+            app.start_input(1, DummyCurses())
+            app.input_text = 'Keep tracking this line.'
+            app.save_input(DummyCurses())
+            comment = load_state(repo).comments[-1]
+            source = repo / 'long_file.py'
+            source.write_text('LINE_0 = 0\n' + source.read_text())
+
+            ReviewApp(repo, load_state(repo)).reload()
+
+            refreshed = self.comments_by_id(repo)[comment.id]
+            self.assertEqual(refreshed.state, 'open')
+            self.assertEqual(refreshed.line_range.start, 251)
+            self.assertEqual(refreshed.line_range.end, 251)
+
+    def test_tui_refresh_supersedes_file_anchor_comment_when_snapshot_deleted(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            self.make_long_repo_with_early_change(repo)
+            app = ReviewApp(repo, load_state(repo))
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = self.row_index_ending(rows, 'LINE_250 = 250')
+            app.start_input(1, DummyCurses())
+            app.input_text = 'Keep tracking this line.'
+            app.save_input(DummyCurses())
+            comment = load_state(repo).comments[-1]
+            source = repo / 'long_file.py'
+            lines = [line for line in source.read_text().splitlines() if line != 'LINE_250 = 250']
+            source.write_text('\n'.join(lines) + '\n')
+
+            ReviewApp(repo, load_state(repo)).reload()
+
+            self.assertEqual(self.comments_by_id(repo)[comment.id].state, 'superseded')
+
+    def test_tui_refresh_supersedes_file_anchor_comment_when_relocation_is_ambiguous(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            self.make_long_repo_with_early_change(repo)
+            state = load_state(repo)
+            comment = Comment(
+                id='LRV-001',
+                state='open',
+                file='long_file.py',
+                side='new',
+                line_range=LineRange(250, 250),
+                hunk=None,
+                body='Ambiguous on purpose.',
+                created_at='2026-07-04T10:00:00Z',
+                updated_at='2026-07-04T10:00:00Z',
+                anchor_kind='file',
+                file_anchor=FileAnchor('sha256:1cb4bbb41155d60663a77d18a344b0d0dfc43a9c90736e223bfe44f83d960b91', 'LINE_DUP = 1', [], []),
+            )
+            save_state(repo, ReviewState(state.version, state.repo_root, state.base_commit, (comment,)))
+            source = repo / 'long_file.py'
+            lines = source.read_text().splitlines()
+            lines[249] = 'LINE_250_REMOVED = 250'
+            lines.insert(100, 'LINE_DUP = 1')
+            lines.insert(200, 'LINE_DUP = 1')
+            source.write_text('\n'.join(lines) + '\n')
+
+            ReviewApp(repo, load_state(repo)).reload()
+
+            self.assertEqual(self.comments_by_id(repo)['LRV-001'].state, 'superseded')
+
+    def test_tui_shows_comment_only_files_with_c_status(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            self.make_long_repo_with_early_change(repo)
+            app = ReviewApp(repo, load_state(repo))
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = self.row_index_ending(rows, 'LINE_250 = 250')
+            app.start_input(1, DummyCurses())
+            app.input_text = 'Carry this review comment after diff disappears.'
+            app.save_input(DummyCurses())
+            subprocess.run(['git', 'checkout', '--', 'long_file.py'], cwd=repo, check=True)
+
+            app = ReviewApp(repo, load_state(repo))
+
+            self.assertEqual([(file.status, file.path) for file in app.files], [('C', 'long_file.py')])
+            self.assertIn('>>> LRV-001 [open] long_file.py:250', app.selected_file_lines())
+
+    def test_tui_untracked_files_continue_to_use_hunk_anchors(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            self.select_file(app, 'src/reports.py')
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = self.row_index_ending(rows, 'def daily_sales_report(orders):')
+
+            app.start_input(1, DummyCurses())
+            app.input_text = 'This new helper is still part of the diff.'
+            app.save_input(DummyCurses())
+
+            comment = load_state(repo).comments[-1]
+            self.assertEqual(comment.anchor_kind, 'hunk')
+            self.assertIsNotNone(comment.hunk)
+            self.assertIn('+def daily_sales_report(orders):', comment.hunk.snapshot)
+
     def test_export_prints_only_open_comments(self):
         with tempfile.TemporaryDirectory() as temp:
             repo = Path(temp) / 'repo'
@@ -708,6 +899,25 @@ class CliTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertNotIn(comment.id, result.stdout)
             self.assertEqual(self.comments_by_id(repo)[comment.id].state, 'superseded')
+
+    def test_export_prints_file_anchor_comments(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            self.make_long_repo_with_early_change(repo)
+            app = ReviewApp(repo, load_state(repo))
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = self.row_index_ending(rows, 'LINE_250 = 250')
+            app.start_input(1, DummyCurses())
+            app.input_text = 'Check this unchanged constant too.'
+            app.save_input(DummyCurses())
+
+            result = self.run_lrv(repo, 'export')
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('### LRV-001 long_file.py:250', result.stdout)
+            self.assertIn('Reviewed file context:', result.stdout)
+            self.assertIn('LINE_250 = 250', result.stdout)
 
     def test_export_accepts_repository_path(self):
         with tempfile.TemporaryDirectory() as temp:

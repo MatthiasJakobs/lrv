@@ -3,8 +3,8 @@ import math
 import re
 import sys
 
-from lrv.git import changed_files, file_diff, file_lines, head_revision
-from lrv.state import HunkSnapshot, ReviewState, append_comment, load_state, mark_comments_superseded, remove_comment, save_state, set_comment_state, update_comment_body
+from lrv.git import ChangedFile, changed_files, file_diff, file_lines, head_revision
+from lrv.state import FileAnchor, HunkSnapshot, ReviewState, append_comment, load_state, mark_comments_superseded, remove_comment, save_state, set_comment_state, update_comment_body, update_comment_line_range
 
 try:
     from pygments import lex
@@ -22,6 +22,7 @@ HUNK_RE = re.compile(r'^@@ -(?P<old_start>\d+)(?:,\d+)? \+(?P<new_start>\d+)(?:,
 SOURCE_ROW_RE = re.compile(r'^( [ 0-9]+ )')
 CTRL_D = 4
 CTRL_U = 21
+FILE_ANCHOR_CONTEXT = 3
 
 
 def run_tui(repo, state):
@@ -37,7 +38,7 @@ def run_tui(repo, state):
 
 
 def render_review(repo, state):
-    files = changed_files(repo)
+    files = review_files(repo, state)
     lines = [
         f'lrv review - HEAD {state.base_commit or head_revision(repo)}',
         '',
@@ -71,8 +72,11 @@ def lines_for_file(repo, state, file):
 def rows_for_file(repo, state, file):
     comments = [comment for comment in state.comments if comment.file == file.path]
     diff_lines = file_diff(repo, file).splitlines()
-    if not diff_lines:
-        return [RenderedLine('(no diff)', None)]
+    if not diff_lines or file.status == 'C':
+        rows = full_file_rows(repo, file)
+        if not rows:
+            return [RenderedLine('(no diff)', None)]
+        return rows_with_comments(rows, comments)
 
     rendered = []
     seen = set()
@@ -96,24 +100,102 @@ def rows_for_file(repo, state, file):
     return rendered
 
 
+def rows_with_comments(rows, comments):
+    rendered = []
+    seen = set()
+    for row in rows:
+        for comment in matching_row_comments(comments, seen, row, 'before'):
+            rendered.extend(RenderedLine(line, None, comment.id) for line in format_inline_comment(comment))
+            seen.add(comment.id)
+
+        rendered.append(row)
+
+        for comment in matching_row_comments(comments, seen, row, 'after'):
+            rendered.extend(RenderedLine(line, None, comment.id) for line in format_inline_comment(comment))
+            seen.add(comment.id)
+
+    for comment in comments:
+        if comment.id not in seen:
+            rendered.extend(RenderedLine(line, None, comment.id) for line in format_inline_comment(comment))
+    return rendered
+
+
+def review_files(repo, state):
+    files = changed_files(repo)
+    by_path = {file.path: file for file in files}
+    for comment in state.comments:
+        if comment.state not in ('open', 'superseded') or comment.file in by_path:
+            continue
+        by_path[comment.file] = ChangedFile(path=comment.file, status='C')
+    return sorted(by_path.values(), key=lambda item: item.path)
+
+
 def refresh_superseded_comments(repo, state):
     if not any(comment.state == 'open' for comment in state.comments):
         return state
 
     current = current_hunks_by_file(repo)
     superseded = []
+    refreshed = state
     for comment in state.comments:
         if comment.state != 'open':
+            continue
+        if comment.anchor_kind == 'file':
+            match = refreshed_file_anchor_range(repo, comment)
+            if match is None:
+                superseded.append(comment.id)
+            else:
+                refreshed = update_comment_line_range(refreshed, comment.id, match[0], match[1])
             continue
         hunks = current.get(comment.file, {})
         current_hash = hunks.get(comment.hunk.header)
         if current_hash != comment.hunk.hash:
             superseded.append(comment.id)
 
-    refreshed = mark_comments_superseded(state, superseded)
+    refreshed = mark_comments_superseded(refreshed, superseded)
     if refreshed is not state:
         save_state(repo, refreshed)
     return refreshed
+
+
+def refreshed_file_anchor_range(repo, comment):
+    lines = read_working_tree_lines(repo, comment.file)
+    if lines is None or comment.file_anchor is None:
+        return None
+    selected = comment.file_anchor.snapshot.split('\n')
+    if selected == [''] and comment.file_anchor.snapshot == '':
+        selected = []
+    current = lines[comment.line_range.start - 1:comment.line_range.end]
+    if current == selected and hash_lines(current) == comment.file_anchor.hash:
+        return (comment.line_range.start, comment.line_range.end)
+
+    matches = exact_snapshot_matches(lines, selected)
+    if len(matches) == 1:
+        return matches[0]
+
+    contextual = [match for match in matches if file_anchor_context_matches(lines, match, comment.file_anchor)]
+    if len(contextual) == 1:
+        return contextual[0]
+    return None
+
+
+def exact_snapshot_matches(lines, selected):
+    if not selected:
+        return []
+    matches = []
+    length = len(selected)
+    for index in range(0, len(lines) - length + 1):
+        if lines[index:index + length] == selected:
+            matches.append((index + 1, index + length))
+    return matches
+
+
+def file_anchor_context_matches(lines, match, file_anchor):
+    start, end = match
+    prefix_start = max(0, start - 1 - len(file_anchor.prefix))
+    prefix = lines[prefix_start:start - 1]
+    suffix = lines[end:end + len(file_anchor.suffix)]
+    return prefix == list(file_anchor.prefix) and suffix == list(file_anchor.suffix)
 
 
 def current_hunks_by_file(repo):
@@ -206,9 +288,22 @@ def full_rows_for_file(repo, file, diff_lines):
         rendered.extend(format_deleted_row(row) for row in deleted_before.get(line_number, []))
         kind = kinds.get(line_number, 'unchanged')
         marker = '+' if kind == 'added' else ' '
-        rendered.append(RenderedLine(f'{marker}{line_number:>4} {line}', anchors.get(line_number), kind=kind))
+        anchor = anchors.get(line_number)
+        if anchor is None and kind == 'unchanged':
+            anchor = DiffAnchor(file.path, 'new', line_number, None)
+        rendered.append(RenderedLine(f'{marker}{line_number:>4} {line}', anchor, kind=kind))
     rendered.extend(format_deleted_row(row) for row in pending_deleted)
     return rendered
+
+
+def full_file_rows(repo, file):
+    lines = file_lines(repo, file)
+    if lines is None:
+        return []
+    return [
+        RenderedLine(f' {line_number:>4} {line}', DiffAnchor(file.path, 'new', line_number, None), kind='unchanged')
+        for line_number, line in enumerate(lines, start=1)
+    ]
 
 
 def format_deleted_row(row):
@@ -283,6 +378,34 @@ def comment_matches_line(comment, old_line, new_line):
     if target is None:
         return False
     return comment.line_range.start <= target <= comment.line_range.end
+
+
+def read_working_tree_lines(repo, path):
+    try:
+        return (repo / path).read_text().splitlines()
+    except (FileNotFoundError, IsADirectoryError, UnicodeDecodeError):
+        return None
+
+
+def hash_lines(lines):
+    snapshot = '\n'.join(lines)
+    return f'sha256:{hashlib.sha256(snapshot.encode()).hexdigest()}'
+
+
+def file_anchor_for_range(repo, path, start, end):
+    lines = read_working_tree_lines(repo, path)
+    if lines is None:
+        return None
+    selected = lines[start - 1:end]
+    prefix_start = max(0, start - 1 - FILE_ANCHOR_CONTEXT)
+    prefix = lines[prefix_start:start - 1]
+    suffix = lines[end:end + FILE_ANCHOR_CONTEXT]
+    return FileAnchor(
+        hash=hash_lines(selected),
+        snapshot='\n'.join(selected),
+        prefix=prefix,
+        suffix=suffix,
+    )
 
 
 def row_matches_anchor(row, anchor):
@@ -371,6 +494,14 @@ class DiffAnchor:
         self.hunk = hunk
 
 
+def anchor_kind(anchor):
+    return 'hunk' if anchor.hunk is not None else 'file'
+
+
+def is_commentable_anchor(anchor):
+    return anchor is not None and (anchor.hunk is not None or anchor.side == 'new')
+
+
 class ReviewApp:
     def __init__(self, repo, state):
         self.repo = repo
@@ -400,7 +531,7 @@ class ReviewApp:
         selected_path = self.files[self.selected].path if self.files and self.selected < len(self.files) else None
         self.state = load_state(self.repo)
         self.state = refresh_superseded_comments(self.repo, self.state)
-        self.files = changed_files(self.repo)
+        self.files = review_files(self.repo, self.state)
         if selected_path is not None:
             for index, file in enumerate(self.files):
                 if file.path == selected_path:
@@ -551,7 +682,7 @@ class ReviewApp:
             return
         anchor_index = max(0, min(len(rows) - 1, self.diff_line))
         anchor = rows[anchor_index].anchor
-        if anchor is None or anchor.hunk is None:
+        if not is_commentable_anchor(anchor):
             self.status_message = 'No reviewable line selected.'
             return
         self.focus = 'diff'
@@ -620,11 +751,11 @@ class ReviewApp:
             self.status_message = 'Selection has no reviewable lines.'
             return None
         first = anchors[0]
-        if first.hunk is None:
-            self.status_message = 'Selection must be inside a hunk.'
-            return None
         for anchor in anchors:
-            if anchor.hunk is None or anchor.hunk.header != first.hunk.header or anchor.hunk.hash != first.hunk.hash:
+            if anchor_kind(anchor) != anchor_kind(first):
+                self.status_message = 'Range comments cannot mix hunk and file lines.'
+                return None
+            if first.hunk is not None and (anchor.hunk is None or anchor.hunk.header != first.hunk.header or anchor.hunk.hash != first.hunk.hash):
                 self.status_message = 'Range comments cannot cross hunks.'
                 return None
             if anchor.side != first.side:
@@ -779,9 +910,10 @@ class ReviewApp:
         self.diff_line = anchor_index
         rows = self.selected_file_rows()
         self.input_anchor = rows[anchor_index].anchor
-        if self.input_anchor is None or self.input_anchor.hunk is None:
+        if not is_commentable_anchor(self.input_anchor):
             return
         self.input_text = ''
+        self.input_end_line = None
         self.input_comment_id = None
         self.input_placement = 'before' if direction < 0 else 'after'
         self.mode = 'input'
@@ -864,6 +996,15 @@ class ReviewApp:
                 self.reload(target_anchor=anchor, target_scroll=scroll)
                 return
             state = self.state_with_base_commit()
+            anchor_kind_value = anchor_kind(anchor)
+            file_anchor = None
+            if anchor_kind_value == 'file':
+                end_line = self.input_end_line if self.input_end_line is not None else anchor.line
+                file_anchor = file_anchor_for_range(self.repo, anchor.file, min(anchor.line, end_line), max(anchor.line, end_line))
+                if file_anchor is None:
+                    self.status_message = 'Could not read file for comment anchor.'
+                    self.cancel_input(curses)
+                    return
             self.state = append_comment(
                 state,
                 anchor.file,
@@ -873,6 +1014,8 @@ class ReviewApp:
                 body,
                 placement=self.input_placement,
                 end_line=self.input_end_line,
+                anchor_kind=anchor_kind_value,
+                file_anchor=file_anchor,
             )
             save_state(self.repo, self.state)
             self.cancel_input(curses)

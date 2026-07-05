@@ -24,14 +24,24 @@ class HunkSnapshot:
         self.snapshot = snapshot
 
 
+class FileAnchor:
+    def __init__(self, hash, snapshot, prefix, suffix):
+        self.hash = hash
+        self.snapshot = snapshot
+        self.prefix = tuple(prefix)
+        self.suffix = tuple(suffix)
+
+
 class Comment:
-    def __init__(self, id, state, file, side, line_range, hunk, body, created_at, updated_at, placement='after'):
+    def __init__(self, id, state, file, side, line_range, hunk, body, created_at, updated_at, placement='after', anchor_kind='hunk', file_anchor=None):
         self.id = id
         self.state = state
         self.file = file
         self.side = side
         self.line_range = line_range
         self.hunk = hunk
+        self.anchor_kind = anchor_kind
+        self.file_anchor = file_anchor
         self.body = body
         self.created_at = created_at
         self.updated_at = updated_at
@@ -88,28 +98,39 @@ def state_to_data(state):
 
 
 def comment_to_data(comment):
-    return {
+    data = {
         'id': comment.id,
         'state': comment.state,
+        'anchorKind': comment.anchor_kind,
         'file': comment.file,
         'side': comment.side,
         'lineRange': {
             'start': comment.line_range.start,
             'end': comment.line_range.end,
         },
-        'hunk': {
-            'header': comment.hunk.header,
-            'hash': comment.hunk.hash,
-            'snapshot': comment.hunk.snapshot,
-        },
         'body': comment.body,
         'createdAt': comment.created_at,
         'updatedAt': comment.updated_at,
         'placement': comment.placement,
     }
+    if comment.anchor_kind == 'file':
+        data['fileAnchor'] = {
+            'hash': comment.file_anchor.hash,
+            'snapshot': comment.file_anchor.snapshot,
+            'prefix': list(comment.file_anchor.prefix),
+            'suffix': list(comment.file_anchor.suffix),
+        }
+        return data
+
+    data['hunk'] = {
+        'header': comment.hunk.header,
+        'hash': comment.hunk.hash,
+        'snapshot': comment.hunk.snapshot,
+    }
+    return data
 
 
-def append_comment(state, file, side, line, hunk, body, placement='after', end_line=None):
+def append_comment(state, file, side, line, hunk, body, placement='after', end_line=None, anchor_kind='hunk', file_anchor=None):
     now = utc_now()
     end = line if end_line is None else end_line
     comment = Comment(
@@ -123,6 +144,8 @@ def append_comment(state, file, side, line, hunk, body, placement='after', end_l
         created_at=now,
         updated_at=now,
         placement=placement,
+        anchor_kind=anchor_kind,
+        file_anchor=file_anchor,
     )
     return ReviewState(
         version=state.version,
@@ -162,6 +185,8 @@ def update_comment_body(state, comment_id, body):
                 created_at=comment.created_at,
                 updated_at=now,
                 placement=comment.placement,
+                anchor_kind=comment.anchor_kind,
+                file_anchor=comment.file_anchor,
             )
         )
     if not changed:
@@ -195,6 +220,8 @@ def set_comment_state(state, comment_id, comment_state):
                 created_at=comment.created_at,
                 updated_at=now,
                 placement=comment.placement,
+                anchor_kind=comment.anchor_kind,
+                file_anchor=comment.file_anchor,
             )
         )
     if not changed:
@@ -232,6 +259,46 @@ def mark_comments_superseded(state, comment_ids):
                 created_at=comment.created_at,
                 updated_at=now,
                 placement=comment.placement,
+                anchor_kind=comment.anchor_kind,
+                file_anchor=comment.file_anchor,
+            )
+        )
+    if not changed:
+        return state
+    return ReviewState(
+        version=state.version,
+        repo_root=state.repo_root,
+        base_commit=state.base_commit,
+        comments=tuple(comments),
+    )
+
+
+def update_comment_line_range(state, comment_id, start, end):
+    comments = []
+    changed = False
+    now = utc_now()
+    for comment in state.comments:
+        if comment.id != comment_id:
+            comments.append(comment)
+            continue
+        if comment.line_range.start == start and comment.line_range.end == end:
+            comments.append(comment)
+            continue
+        changed = True
+        comments.append(
+            Comment(
+                id=comment.id,
+                state=comment.state,
+                file=comment.file,
+                side=comment.side,
+                line_range=LineRange(start=start, end=end),
+                hunk=comment.hunk,
+                body=comment.body,
+                created_at=comment.created_at,
+                updated_at=now,
+                placement=comment.placement,
+                anchor_kind=comment.anchor_kind,
+                file_anchor=comment.file_anchor,
             )
         )
     if not changed:
@@ -269,18 +336,35 @@ def parse_state(data):
 
 def parse_comment(data):
     line_range = data.get('lineRange', {})
+    anchor_kind = str(data.get('anchorKind', 'hunk'))
     hunk = data.get('hunk', {})
+    file_anchor = data.get('fileAnchor', {})
     return Comment(
         id=str(data['id']),
         state=str(data['state']),
         file=str(data['file']),
         side=str(data['side']),
         line_range=LineRange(start=int(line_range['start']), end=int(line_range['end'])),
-        hunk=HunkSnapshot(header=str(hunk['header']), hash=str(hunk['hash']), snapshot=str(hunk['snapshot'])),
+        hunk=parse_hunk(hunk) if anchor_kind == 'hunk' else None,
         body=str(data['body']),
         created_at=str(data['createdAt']),
         updated_at=str(data['updatedAt']),
         placement=str(data.get('placement', 'after')),
+        anchor_kind=anchor_kind,
+        file_anchor=parse_file_anchor(file_anchor) if anchor_kind == 'file' else None,
+    )
+
+
+def parse_hunk(data):
+    return HunkSnapshot(header=str(data['header']), hash=str(data['hash']), snapshot=str(data['snapshot']))
+
+
+def parse_file_anchor(data):
+    return FileAnchor(
+        hash=str(data['hash']),
+        snapshot=str(data['snapshot']),
+        prefix=[str(line) for line in data.get('prefix', [])],
+        suffix=[str(line) for line in data.get('suffix', [])],
     )
 
 

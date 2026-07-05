@@ -44,15 +44,21 @@ def render_comment(comment, include_state=False):
     lines = [title, '']
     if include_state:
         lines.extend(['State:', comment.state, ''])
+    if comment.anchor_kind == 'file':
+        context_label = 'Reviewed file context:'
+        context = comment.file_anchor.snapshot
+    else:
+        context_label = 'Reviewed diff context:'
+        context = comment.hunk.snapshot
     lines.extend(
         [
             'Comment:',
             comment.body,
             '',
-            'Reviewed diff context:',
+            context_label,
             '',
             '```diff',
-            comment.hunk.snapshot,
+            context,
             '```',
         ]
     )
