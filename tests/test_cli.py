@@ -123,6 +123,76 @@ class CliTest(unittest.TestCase):
             self.assertIn('  superseded: 1 (LRV-002)', result.stdout)
             self.assertIn('  dismissed: 1 (LRV-004)', result.stdout)
 
+    def test_sidebar_rows_reflect_folder_structure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+
+            rows = tui.sidebar_rows(app.files)
+
+            self.assertEqual([(row.kind, row.depth, row.name) for row in rows[:3]], [('folder', 0, 'src'), ('file', 1, 'calculator.py'), ('file', 1, 'formatters.py')])
+
+    def test_sidebar_file_stats_count_diff_rows_and_active_comments(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            file = next(file for file in app.files if file.path == 'src/calculator.py')
+
+            added, removed = tui.file_change_counts(repo, file)
+            comments = tui.file_comment_count(app.state, file.path)
+
+            self.assertEqual((added, removed, comments), (17, 10, 1))
+
+    def test_draw_sidebar_file_colors_counts(self):
+        app = ReviewApp.__new__(ReviewApp)
+        screen = FakeScreen()
+        curses = DummyCurses()
+        row = tui.SidebarRow('file', 'src/parser.py', 'parser.py', 1, 0)
+        file = tui.ChangedFile('src/parser.py', 'M')
+
+        app.draw_sidebar_file(screen, 4, 1, 36, row, file, 33, 15, 2, DummyCurses.A_NORMAL, curses)
+
+        self.assertIn((4, 20, '+', curses.color_pair(2) | DummyCurses.A_BOLD), screen.calls)
+        self.assertIn((4, 21, '  33', curses.color_pair(2) | DummyCurses.A_BOLD), screen.calls)
+        self.assertIn((4, 26, '-', curses.color_pair(3) | DummyCurses.A_BOLD), screen.calls)
+        self.assertIn((4, 27, '  15', curses.color_pair(3) | DummyCurses.A_BOLD), screen.calls)
+        self.assertIn((4, 32, '*', curses.color_pair(11) | DummyCurses.A_BOLD), screen.calls)
+        self.assertIn((4, 33, '   2', curses.color_pair(11) | DummyCurses.A_BOLD), screen.calls)
+
+    def test_draw_sidebar_file_highlights_only_file_name(self):
+        app = ReviewApp.__new__(ReviewApp)
+        screen = FakeScreen()
+        curses = DummyCurses()
+        row = tui.SidebarRow('file', 'src/parser.py', 'parser.py', 1, 0)
+        file = tui.ChangedFile('src/parser.py', 'M')
+        selected_attr = curses.color_pair(1)
+
+        app.draw_sidebar_file(screen, 4, 1, 36, row, file, 33, 15, 2, selected_attr, curses)
+
+        self.assertIn((4, 1, '  M ', DummyCurses.A_NORMAL), screen.calls)
+        self.assertIn((4, 5, 'parser.py', selected_attr), screen.calls)
+        self.assertIn((4, 19, ' ', DummyCurses.A_NORMAL), screen.calls)
+        self.assertIn((4, 25, ' ', DummyCurses.A_NORMAL), screen.calls)
+        self.assertIn((4, 31, ' ', DummyCurses.A_NORMAL), screen.calls)
+
+    def test_draw_sidebar_file_hides_zero_counts_but_keeps_columns(self):
+        app = ReviewApp.__new__(ReviewApp)
+        screen = FakeScreen()
+        curses = DummyCurses()
+        row = tui.SidebarRow('file', 'src/parser.py', 'parser.py', 1, 0)
+        file = tui.ChangedFile('src/parser.py', 'M')
+
+        app.draw_sidebar_file(screen, 4, 1, 36, row, file, 0, 15, 0, DummyCurses.A_NORMAL, curses)
+
+        self.assertIn((4, 20, ' ', curses.color_pair(2) | DummyCurses.A_BOLD), screen.calls)
+        self.assertIn((4, 21, '    ', curses.color_pair(2) | DummyCurses.A_BOLD), screen.calls)
+        self.assertIn((4, 26, '-', curses.color_pair(3) | DummyCurses.A_BOLD), screen.calls)
+        self.assertIn((4, 27, '  15', curses.color_pair(3) | DummyCurses.A_BOLD), screen.calls)
+        self.assertIn((4, 32, ' ', curses.color_pair(11) | DummyCurses.A_BOLD), screen.calls)
+        self.assertIn((4, 33, '    ', curses.color_pair(11) | DummyCurses.A_BOLD), screen.calls)
+
     def test_minimap_buckets_prioritize_comments_and_diffs(self):
         rows = [
             RenderedLine('    1 unchanged', None, kind='unchanged'),

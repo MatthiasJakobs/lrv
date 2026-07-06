@@ -39,6 +39,8 @@ CUSTOM_CHANGED_BG_RGB = {
     'added': (18, 55, 34),
     'deleted': (70, 28, 24),
 }
+SIDEBAR_FILE_LABEL_WIDTH = 18
+SIDEBAR_COUNT_WIDTH = 4
 CHANGED_SYNTAX_PAIRS = {
     'added': {
         None: 16,
@@ -186,6 +188,44 @@ def review_files(repo, state):
             continue
         by_path[comment.file] = ChangedFile(path=comment.file, status='C')
     return sorted(by_path.values(), key=lambda item: item.path)
+
+
+def sidebar_rows(files):
+    rows = []
+    seen_folders = set()
+    for file_index, file in enumerate(files):
+        parts = file.path.split('/')
+        for depth, name in enumerate(parts[:-1]):
+            path = '/'.join(parts[:depth + 1])
+            if path in seen_folders:
+                continue
+            seen_folders.add(path)
+            rows.append(SidebarRow('folder', path, name, depth))
+        rows.append(SidebarRow('file', file.path, parts[-1], len(parts) - 1, file_index))
+    return rows
+
+
+def file_change_counts(repo, file):
+    added = 0
+    removed = 0
+    for line in file_diff(repo, file).splitlines():
+        if line.startswith('+++') or line.startswith('---'):
+            continue
+        if line.startswith('+'):
+            added += 1
+        elif line.startswith('-'):
+            removed += 1
+    return added, removed
+
+
+def file_comment_count(state, path):
+    return len([comment for comment in state.comments if comment.file == path and comment.state in ('open', 'superseded')])
+
+
+def sidebar_count_segments(count, marker, attr):
+    if count == 0:
+        return [(' ', attr), (' ' * SIDEBAR_COUNT_WIDTH, attr)]
+    return [(marker, attr), (f'{count:>{SIDEBAR_COUNT_WIDTH}}', attr)]
 
 
 def refresh_superseded_comments(repo, state):
@@ -552,6 +592,15 @@ class RenderedLine:
         self.comment_state = comment_state
 
 
+class SidebarRow:
+    def __init__(self, kind, path, name, depth, file_index=None):
+        self.kind = kind
+        self.path = path
+        self.name = name
+        self.depth = depth
+        self.file_index = file_index
+
+
 class DiffAnchor:
     def __init__(self, file, side, line, hunk):
         self.file = file
@@ -592,6 +641,7 @@ class ReviewApp:
         self.modal_scroll = 0
         self.syntax_colors = False
         self.changed_line_backgrounds = False
+        self.change_counts = {}
         self.pending_key = None
         self.reload()
 
@@ -600,6 +650,7 @@ class ReviewApp:
         self.state = load_state(self.repo)
         self.state = refresh_superseded_comments(self.repo, self.state)
         self.files = review_files(self.repo, self.state)
+        self.change_counts = {file.path: file_change_counts(self.repo, file) for file in self.files}
         if selected_path is not None:
             for index, file in enumerate(self.files):
                 if file.path == selected_path:
@@ -1216,12 +1267,54 @@ class ReviewApp:
             self.addstr(screen, 4, 1, 'none')
             return
 
-        for index, file in enumerate(self.files[:height - 4]):
-            attr = curses.color_pair(1) if index == self.selected and self.focus == 'files' else curses.A_NORMAL
-            if index == self.selected and self.focus == 'diff':
+        rows = sidebar_rows(self.files)
+        for index, row in enumerate(rows[:height - 4]):
+            if row.kind == 'folder':
+                self.draw_sidebar_folder(screen, index + 4, 1, width - 2, row, curses)
+                continue
+            file = self.files[row.file_index]
+            added, removed = self.change_counts.get(file.path, (0, 0))
+            comments = file_comment_count(self.state, file.path)
+            selected = row.file_index == self.selected
+            attr = curses.color_pair(1) if selected and self.focus == 'files' else curses.A_NORMAL
+            if selected and self.focus == 'diff':
                 attr = curses.A_BOLD
-            label = f'{file.status} {file.path}'
-            self.addstr(screen, index + 4, 1, label[:width - 2], attr)
+            self.draw_sidebar_file(screen, index + 4, 1, width - 2, row, file, added, removed, comments, attr, curses)
+
+    def draw_sidebar_folder(self, screen, y, x, width, row, curses):
+        indent = '  ' * row.depth
+        label = f'{indent}{row.name}/'
+        self.addstr(screen, y, x, label[:width], curses.A_BOLD | curses.A_DIM)
+
+    def draw_sidebar_file(self, screen, y, x, width, row, file, added, removed, comments, attr, curses):
+        segments = []
+        segments.extend(sidebar_count_segments(added, '+', curses.color_pair(2) | curses.A_BOLD))
+        segments.append((' ', curses.A_NORMAL))
+        segments.extend(sidebar_count_segments(removed, '-', curses.color_pair(3) | curses.A_BOLD))
+        segments.append((' ', curses.A_NORMAL))
+        segments.extend(sidebar_count_segments(comments, '*', curses.color_pair(11) | curses.A_BOLD))
+        stats_width = sum(len(text) for text, _attr in segments)
+        label_width = min(SIDEBAR_FILE_LABEL_WIDTH, max(0, width - stats_width - 1))
+        indent = '  ' * row.depth
+        prefix = f'{indent}{file.status} '
+        prefix = prefix[:label_width]
+        self.addstr(screen, y, x, prefix, curses.A_NORMAL)
+        name_width = max(0, label_width - len(prefix))
+        name = row.name
+        if len(name) > name_width:
+            name = name[:max(0, name_width - 1)] + '~' if name_width > 0 else ''
+        self.addstr(screen, y, x + len(prefix), name[:name_width], attr)
+        column = x + label_width
+        if label_width > 0:
+            gap = max(1, width - label_width - stats_width)
+            self.addstr(screen, y, column, ' ' * gap, curses.A_NORMAL)
+            column += gap
+        for text, segment_attr in segments:
+            if column - x >= width:
+                break
+            value = text[:max(0, width - (column - x))]
+            self.addstr(screen, y, column, value, segment_attr)
+            column += len(value)
 
     def draw_main(self, screen, height, width, x, curses):
         if not self.files:
