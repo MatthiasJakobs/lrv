@@ -142,18 +142,18 @@ def rows_for_file(repo, state, file):
 
     for row in diff_rows:
         for comment in matching_row_comments(comments, seen, row, 'before'):
-            rendered.extend(RenderedLine(line, None, comment.id) for line in format_inline_comment(comment))
+            rendered.extend(inline_comment_rows(comment))
             seen.add(comment.id)
 
         rendered.append(row)
 
         for comment in matching_row_comments(comments, seen, row, 'after'):
-            rendered.extend(RenderedLine(line, None, comment.id) for line in format_inline_comment(comment))
+            rendered.extend(inline_comment_rows(comment))
             seen.add(comment.id)
 
     for comment in comments:
         if comment.id not in seen:
-            rendered.extend(RenderedLine(line, None, comment.id) for line in format_inline_comment(comment))
+            rendered.extend(inline_comment_rows(comment))
 
     return rendered
 
@@ -163,18 +163,18 @@ def rows_with_comments(rows, comments):
     seen = set()
     for row in rows:
         for comment in matching_row_comments(comments, seen, row, 'before'):
-            rendered.extend(RenderedLine(line, None, comment.id) for line in format_inline_comment(comment))
+            rendered.extend(inline_comment_rows(comment))
             seen.add(comment.id)
 
         rendered.append(row)
 
         for comment in matching_row_comments(comments, seen, row, 'after'):
-            rendered.extend(RenderedLine(line, None, comment.id) for line in format_inline_comment(comment))
+            rendered.extend(inline_comment_rows(comment))
             seen.add(comment.id)
 
     for comment in comments:
         if comment.id not in seen:
-            rendered.extend(RenderedLine(line, None, comment.id) for line in format_inline_comment(comment))
+            rendered.extend(inline_comment_rows(comment))
     return rendered
 
 
@@ -366,7 +366,7 @@ def full_file_rows(repo, file):
 
 def format_deleted_row(row):
     text = row.text[1:] if row.text.startswith('-') else row.text
-    return RenderedLine(f'-{row.anchor.line:>4} {text}', row.anchor, row.comment_id, kind='deleted')
+    return RenderedLine(f'-{row.anchor.line:>4} {text}', row.anchor, row.comment_id, kind='deleted', comment_state=row.comment_state)
 
 
 def minimap_kind(rows):
@@ -479,6 +479,13 @@ def format_inline_comment(comment):
     return lines
 
 
+def inline_comment_rows(comment):
+    return [
+        RenderedLine(line, None, comment.id, comment_state=comment.state)
+        for line in format_inline_comment(comment)
+    ]
+
+
 def source_row_parts(row):
     if row.comment_id is not None or row.kind not in ('unchanged', 'added', 'deleted'):
         return None
@@ -537,11 +544,12 @@ def syntax_spans(path, code):
 
 
 class RenderedLine:
-    def __init__(self, text, anchor, comment_id=None, kind='normal'):
+    def __init__(self, text, anchor, comment_id=None, kind='normal', comment_state=None):
         self.text = text
         self.anchor = anchor
         self.comment_id = comment_id
         self.kind = kind
+        self.comment_state = comment_state
 
 
 class DiffAnchor:
@@ -907,7 +915,7 @@ class ReviewApp:
         rendered = []
         for index, row in enumerate(rows):
             kind = 'visual' if index in indexes and row.anchor is not None else row.kind
-            rendered.append(RenderedLine(row.text, row.anchor, row.comment_id, kind))
+            rendered.append(RenderedLine(row.text, row.anchor, row.comment_id, kind, row.comment_state))
         return rendered
 
     def diff_progress_label(self):
@@ -1333,20 +1341,23 @@ class ReviewApp:
         self.addstr(screen, bottom, x, '+' + '-' * (modal_width - 2) + '+', curses.A_BOLD)
 
     def modal_comment_attr(self, curses, comment):
-        if comment.state == 'open':
+        return self.comment_state_attr(curses, comment.state)
+
+    def comment_state_attr(self, curses, state):
+        if state == 'open':
             return curses.color_pair(5) | curses.A_BOLD
-        if comment.state == 'superseded':
+        if state == 'superseded':
             return curses.color_pair(4)
-        if comment.state == 'resolved':
+        if state == 'resolved':
             return curses.color_pair(2)
-        if comment.state == 'dismissed':
+        if state == 'dismissed':
             return curses.color_pair(3)
         return curses.A_NORMAL
 
     def line_attr(self, curses, row):
         line = row.text
         if line.startswith('>>>'):
-            return curses.color_pair(5) | curses.A_BOLD
+            return self.comment_state_attr(curses, row.comment_state or 'open')
         if row.kind == 'visual':
             return curses.color_pair(8) | curses.A_BOLD
         if row.kind == 'added':

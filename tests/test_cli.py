@@ -200,6 +200,38 @@ class CliTest(unittest.TestCase):
         self.assertEqual(app.line_attr(DummyCurses(), RenderedLine('   40 code', None, kind='unchanged')), DummyCurses.A_NORMAL)
         self.assertEqual(app.current_line_attr(DummyCurses()), DummyCurses.A_BOLD | DummyCurses.A_UNDERLINE)
 
+    def test_inline_comment_rows_keep_comment_state(self):
+        comment = Comment(
+            id='LRV-101',
+            state='superseded',
+            file='src/parser.py',
+            side='new',
+            line_range=LineRange(4, 4),
+            hunk=None,
+            body='Recheck this.',
+            created_at='2026-07-04T10:00:00Z',
+            updated_at='2026-07-04T10:00:00Z',
+        )
+
+        rows = tui.inline_comment_rows(comment)
+
+        self.assertEqual([row.comment_state for row in rows], ['superseded', 'superseded'])
+
+    def test_inline_comment_attr_uses_modal_state_colors(self):
+        app = ReviewApp.__new__(ReviewApp)
+        curses = DummyCurses()
+
+        states = {
+            'open': curses.color_pair(5) | curses.A_BOLD,
+            'superseded': curses.color_pair(4),
+            'resolved': curses.color_pair(2),
+            'dismissed': curses.color_pair(3),
+        }
+        for state, attr in states.items():
+            row = RenderedLine('>>> comment', None, 'LRV-001', comment_state=state)
+
+            self.assertEqual(app.line_attr(curses, row), attr)
+
     def test_changed_line_backgrounds_require_extended_colors(self):
         app = ReviewApp.__new__(ReviewApp)
 
