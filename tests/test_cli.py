@@ -18,6 +18,10 @@ class DummyCurses:
     KEY_ENTER = 10
     KEY_UP = 259
     KEY_DOWN = 258
+    KEY_PPAGE = 339
+    KEY_NPAGE = 338
+    KEY_LEFT = 260
+    KEY_RIGHT = 261
     A_NORMAL = 0
     A_BOLD = 1
     A_REVERSE = 2
@@ -239,6 +243,39 @@ class CliTest(unittest.TestCase):
             app.diff_line = 3
             app.visible_diff_height = 12
             app.half_page_diff(1)
+            self.assertEqual(app.focus, 'files')
+            self.assertEqual(app.selected, 1)
+            self.assertEqual(app.diff_line, 3)
+
+    def test_tui_gg_and_G_jump_to_first_and_last_diff_line(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            curses = DummyCurses()
+
+            app.focus = 'diff'
+            app.handle_normal_key(ord('G'), curses)
+            self.assertEqual(app.diff_line, len(app.selected_file_lines()) - 1)
+
+            app.handle_normal_key(ord('g'), curses)
+            self.assertEqual(app.diff_line, len(app.selected_file_lines()) - 1)
+            app.handle_normal_key(ord('g'), curses)
+            self.assertEqual(app.diff_line, 0)
+
+    def test_tui_gg_and_G_ignore_file_focus(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            curses = DummyCurses()
+
+            app.focus = 'files'
+            app.selected = 1
+            app.diff_line = 3
+            app.handle_normal_key(ord('G'), curses)
+            app.handle_normal_key(ord('g'), curses)
+            app.handle_normal_key(ord('g'), curses)
             self.assertEqual(app.focus, 'files')
             self.assertEqual(app.selected, 1)
             self.assertEqual(app.diff_line, 3)

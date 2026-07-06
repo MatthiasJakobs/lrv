@@ -525,6 +525,7 @@ class ReviewApp:
         self.modal_index = 0
         self.modal_scroll = 0
         self.syntax_colors = False
+        self.pending_key = None
         self.reload()
 
     def reload(self, target_anchor=None, target_scroll=None):
@@ -567,40 +568,56 @@ class ReviewApp:
             if self.mode == 'visual':
                 self.handle_visual_key(key, curses)
                 continue
-            if key in (ord('q'), 27):
+            if self.handle_normal_key(key, curses):
                 return
-            if key in (ord('r'),):
-                self.reload()
-            elif key in (ord('\t'),):
-                self.toggle_focus()
-            elif key in (curses.KEY_UP, ord('k')):
-                self.move_up()
-            elif key in (curses.KEY_DOWN, ord('j')):
-                self.move_down()
-            elif key in (curses.KEY_PPAGE, ord('b')):
-                self.page_diff(-10)
-            elif key in (curses.KEY_NPAGE, ord('f')):
-                self.page_diff(10)
-            elif key == ord(' '):
-                self.open_comment_modal()
-            elif key == CTRL_D:
-                self.half_page_diff(1)
-            elif key == CTRL_U:
-                self.half_page_diff(-1)
-            elif key in (curses.KEY_LEFT, ord('h')):
-                self.focus = 'files'
-            elif key in (curses.KEY_RIGHT, ord('l')):
-                self.focus = 'diff'
-            elif key == ord('o'):
-                self.start_input(1, curses)
-            elif key == ord('O'):
-                self.start_input(-1, curses)
-            elif key in (ord('v'), ord('V')):
-                self.start_visual()
-            elif key == ord('i'):
-                self.start_comment_edit(curses)
-            elif key == ord('d'):
-                self.delete_selected_comment()
+
+    def handle_normal_key(self, key, curses):
+        if self.pending_key == ord('g'):
+            self.pending_key = None
+            if key == ord('g'):
+                self.first_diff_line()
+                return False
+        if key == ord('g'):
+            self.pending_key = key
+        elif key in (ord('q'), 27):
+            return True
+        elif key in (ord('r'),):
+            self.reload()
+        elif key in (ord('\t'),):
+            self.toggle_focus()
+        elif key in (curses.KEY_UP, ord('k')):
+            self.move_up()
+        elif key in (curses.KEY_DOWN, ord('j')):
+            self.move_down()
+        elif key in (curses.KEY_PPAGE, ord('b')):
+            self.page_diff(-10)
+        elif key in (curses.KEY_NPAGE, ord('f')):
+            self.page_diff(10)
+        elif key == ord(' '):
+            self.open_comment_modal()
+        elif key == CTRL_D:
+            self.half_page_diff(1)
+        elif key == CTRL_U:
+            self.half_page_diff(-1)
+        elif key in (curses.KEY_LEFT, ord('h')):
+            self.focus = 'files'
+        elif key in (curses.KEY_RIGHT, ord('l')):
+            self.focus = 'diff'
+        elif key == ord('G'):
+            self.last_diff_line()
+        elif key == ord('o'):
+            self.start_input(1, curses)
+        elif key == ord('O'):
+            self.start_input(-1, curses)
+        elif key in (ord('v'), ord('V')):
+            self.start_visual()
+        elif key == ord('i'):
+            self.start_comment_edit(curses)
+        elif key == ord('d'):
+            self.delete_selected_comment()
+        else:
+            self.pending_key = None
+        return False
 
     def init_colors(self, curses):
         if not curses.has_colors():
@@ -672,6 +689,19 @@ class ReviewApp:
             return
         amount = max(1, self.visible_diff_height // 2)
         self.move_diff_line(amount * direction)
+
+    def first_diff_line(self):
+        if self.focus != 'diff':
+            return
+        self.diff_line = 0
+
+    def last_diff_line(self):
+        if self.focus != 'diff':
+            return
+        lines = self.selected_file_lines()
+        if not lines:
+            return
+        self.diff_line = len(lines) - 1
 
     def start_visual(self):
         if not self.files:
