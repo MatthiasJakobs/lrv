@@ -19,10 +19,68 @@ except Exception:
 
 
 HUNK_RE = re.compile(r'^@@ -(?P<old_start>\d+)(?:,\d+)? \+(?P<new_start>\d+)(?:,\d+)? @@')
-SOURCE_ROW_RE = re.compile(r'^( [ 0-9]+ )')
+SOURCE_ROW_RE = re.compile(r'^([ +-] *\d+ )')
 CTRL_D = 4
 CTRL_U = 21
 FILE_ANCHOR_CONTEXT = 3
+CHANGED_BG_PAIRS = {
+    'added': 14,
+    'deleted': 15,
+}
+CHANGED_BG_COLORS = {
+    'added': 22,
+    'deleted': 52,
+}
+CUSTOM_CHANGED_BG_COLORS = {
+    'added': 100,
+    'deleted': 101,
+}
+CUSTOM_CHANGED_BG_RGB = {
+    'added': (18, 55, 34),
+    'deleted': (70, 28, 24),
+}
+CHANGED_SYNTAX_PAIRS = {
+    'added': {
+        None: 16,
+        'comment': 17,
+        'error': 18,
+        'keyword': 19,
+        'string': 20,
+        'number': 21,
+        'literal': 21,
+        'function': 22,
+        'class': 22,
+        'decorator': 22,
+        'builtin': 23,
+        'constant': 23,
+        'namespace': 24,
+        'attribute': 24,
+        'variable': 25,
+        'operator': 25,
+        'punctuation': 25,
+        'generic': 26,
+    },
+    'deleted': {
+        None: 27,
+        'comment': 28,
+        'error': 29,
+        'keyword': 30,
+        'string': 31,
+        'number': 32,
+        'literal': 32,
+        'function': 33,
+        'class': 33,
+        'decorator': 33,
+        'builtin': 34,
+        'constant': 34,
+        'namespace': 35,
+        'attribute': 35,
+        'variable': 36,
+        'operator': 36,
+        'punctuation': 36,
+        'generic': 37,
+    },
+}
 
 
 def run_tui(repo, state):
@@ -422,7 +480,7 @@ def format_inline_comment(comment):
 
 
 def source_row_parts(row):
-    if row.comment_id is not None or row.kind != 'unchanged':
+    if row.comment_id is not None or row.kind not in ('unchanged', 'added', 'deleted'):
         return None
     match = SOURCE_ROW_RE.match(row.text)
     if not match:
@@ -525,6 +583,7 @@ class ReviewApp:
         self.modal_index = 0
         self.modal_scroll = 0
         self.syntax_colors = False
+        self.changed_line_backgrounds = False
         self.pending_key = None
         self.reload()
 
@@ -637,6 +696,9 @@ class ReviewApp:
         self.init_color_pair(curses, 11, curses.COLOR_MAGENTA if curses.COLORS > 7 else curses.COLOR_CYAN, -1)
         self.init_color_pair(curses, 12, curses.COLOR_BLUE, -1)
         self.init_color_pair(curses, 13, curses.COLOR_WHITE, -1)
+        self.changed_line_backgrounds = self.changed_line_backgrounds_supported(curses)
+        if self.changed_line_backgrounds:
+            self.init_changed_color_pairs(curses)
         self.syntax_colors = lex is not None
 
     def init_color_pair(self, curses, pair, foreground, background):
@@ -644,6 +706,35 @@ class ReviewApp:
             curses.init_pair(pair, foreground, background)
         except Exception:
             pass
+
+    def init_changed_color_pairs(self, curses):
+        for row_kind in CHANGED_BG_PAIRS:
+            background = self.changed_background_color(curses, row_kind)
+            self.init_color_pair(curses, CHANGED_BG_PAIRS[row_kind], curses.COLOR_WHITE, background)
+            for kind, pair in CHANGED_SYNTAX_PAIRS[row_kind].items():
+                foreground = self.syntax_foreground(curses, kind)
+                self.init_color_pair(curses, pair, foreground, background)
+
+    def changed_line_backgrounds_supported(self, curses):
+        return getattr(curses, 'COLORS', 0) >= 256
+
+    def changed_background_color(self, curses, row_kind):
+        custom = CUSTOM_CHANGED_BG_COLORS[row_kind]
+        if self.custom_changed_backgrounds_supported(curses, custom):
+            red, green, blue = CUSTOM_CHANGED_BG_RGB[row_kind]
+            try:
+                curses.init_color(custom, red, green, blue)
+                return custom
+            except Exception:
+                pass
+        return CHANGED_BG_COLORS[row_kind]
+
+    def custom_changed_backgrounds_supported(self, curses, color):
+        try:
+            can_change = curses.can_change_color()
+        except Exception:
+            can_change = False
+        return can_change and getattr(curses, 'COLORS', 0) > color
 
     def move_selected(self, delta):
         if not self.files:
@@ -1259,8 +1350,12 @@ class ReviewApp:
         if row.kind == 'visual':
             return curses.color_pair(8) | curses.A_BOLD
         if row.kind == 'added':
+            if self.changed_line_backgrounds:
+                return curses.color_pair(CHANGED_BG_PAIRS['added'])
             return curses.color_pair(2)
         if row.kind == 'deleted':
+            if self.changed_line_backgrounds:
+                return curses.color_pair(CHANGED_BG_PAIRS['deleted'])
             return curses.color_pair(3)
         if row.kind == 'unchanged':
             return curses.A_NORMAL
@@ -1292,16 +1387,28 @@ class ReviewApp:
         for text, kind in syntax_spans(path, code):
             if remaining <= 0:
                 break
-            value = text[:remaining]
+            value = text.replace('\n', '').replace('\r', '')[:remaining]
+            if not value:
+                continue
             span_attr = self.syntax_attr(curses, kind, base_attr)
             if selected:
                 span_attr |= selected_attr
             self.addstr(screen, y, column, value, span_attr)
             column += len(value)
             remaining -= len(value)
+        if self.changed_row_kind_for_attr(curses, base_attr) is not None and remaining > 0:
+            self.addstr(screen, y, column, ' ' * remaining, attr)
         return True
 
     def syntax_attr(self, curses, kind, base_attr):
+        row_kind = self.changed_row_kind_for_attr(curses, base_attr)
+        if row_kind is not None:
+            attr = curses.color_pair(CHANGED_SYNTAX_PAIRS[row_kind].get(kind, CHANGED_SYNTAX_PAIRS[row_kind][None]))
+            if kind in ('error', 'keyword', 'function', 'class', 'decorator', 'builtin', 'constant', 'operator', 'punctuation'):
+                attr |= curses.A_BOLD
+            if kind == 'comment':
+                attr |= curses.A_DIM
+            return attr
         if kind == 'comment':
             return curses.A_DIM
         if kind == 'error':
@@ -1325,6 +1432,34 @@ class ReviewApp:
         if kind == 'generic':
             return curses.color_pair(4)
         return base_attr
+
+    def changed_row_kind_for_attr(self, curses, attr):
+        if not getattr(self, 'changed_line_backgrounds', True):
+            return None
+        if attr == curses.color_pair(CHANGED_BG_PAIRS['added']):
+            return 'added'
+        if attr == curses.color_pair(CHANGED_BG_PAIRS['deleted']):
+            return 'deleted'
+        return None
+
+    def syntax_foreground(self, curses, kind):
+        if kind == 'comment':
+            return curses.COLOR_WHITE
+        if kind == 'error':
+            return curses.COLOR_RED
+        if kind == 'keyword':
+            return curses.COLOR_CYAN
+        if kind == 'string':
+            return curses.COLOR_YELLOW
+        if kind in ('number', 'literal', 'builtin', 'constant'):
+            return curses.COLOR_MAGENTA if curses.COLORS > 7 else curses.COLOR_CYAN
+        if kind in ('function', 'class', 'decorator'):
+            return curses.COLOR_BLUE
+        if kind in ('namespace', 'attribute', 'generic'):
+            return curses.COLOR_CYAN
+        if kind in ('variable', 'operator', 'punctuation'):
+            return curses.COLOR_WHITE
+        return curses.COLOR_WHITE
 
     def addstr(self, screen, y, x, value, attr=0):
         try:

@@ -27,12 +27,37 @@ class DummyCurses:
     A_REVERSE = 2
     A_DIM = 4
     A_UNDERLINE = 8
+    COLOR_BLACK = 0
+    COLOR_RED = 1
+    COLOR_GREEN = 2
+    COLOR_YELLOW = 3
+    COLOR_BLUE = 4
+    COLOR_MAGENTA = 5
+    COLOR_CYAN = 6
+    COLOR_WHITE = 7
+    COLORS = 256
+    color_changes = []
 
     def curs_set(self, visible):
         self.cursor_visible = visible
 
     def color_pair(self, pair):
         return pair * 16
+
+    def can_change_color(self):
+        return True
+
+    def init_color(self, color, red, green, blue):
+        self.color_changes.append((color, red, green, blue))
+
+
+class LowColorCurses(DummyCurses):
+    COLORS = 8
+
+
+class FixedPaletteCurses(DummyCurses):
+    def can_change_color(self):
+        return False
 
 
 class FakeScreen:
@@ -143,10 +168,10 @@ class CliTest(unittest.TestCase):
             self.assertIn('--- ?? src/formatters.py ---', result.stdout)
             self.assertIn('+   1 def format_receipt_line(name, quantity, price):', result.stdout)
 
-    def test_source_row_parts_extracts_only_unchanged_code_rows(self):
+    def test_source_row_parts_extracts_code_rows(self):
         self.assertEqual(source_row_parts(RenderedLine('   40 def format_total(total):', None, kind='unchanged')), ('   40 ', 'def format_total(total):'))
-        self.assertIsNone(source_row_parts(RenderedLine('+   4         return 1', None, kind='added')))
-        self.assertIsNone(source_row_parts(RenderedLine('-   4         raise ValueError()', None, kind='deleted')))
+        self.assertEqual(source_row_parts(RenderedLine('+   4         return 1', None, kind='added')), ('+   4 ', '        return 1'))
+        self.assertEqual(source_row_parts(RenderedLine('-   4         raise ValueError()', None, kind='deleted')), ('-   4 ', '        raise ValueError()'))
         self.assertIsNone(source_row_parts(RenderedLine('>>> LRV-001 [open]', None, 'LRV-001')))
         self.assertIsNone(source_row_parts(RenderedLine('   40 def format_total(total):', None, kind='visual')))
 
@@ -175,6 +200,27 @@ class CliTest(unittest.TestCase):
         self.assertEqual(app.line_attr(DummyCurses(), RenderedLine('   40 code', None, kind='unchanged')), DummyCurses.A_NORMAL)
         self.assertEqual(app.current_line_attr(DummyCurses()), DummyCurses.A_BOLD | DummyCurses.A_UNDERLINE)
 
+    def test_changed_line_backgrounds_require_extended_colors(self):
+        app = ReviewApp.__new__(ReviewApp)
+
+        self.assertFalse(app.changed_line_backgrounds_supported(LowColorCurses()))
+        self.assertTrue(app.changed_line_backgrounds_supported(DummyCurses()))
+
+    def test_changed_background_color_uses_muted_custom_color_when_supported(self):
+        app = ReviewApp.__new__(ReviewApp)
+        curses = DummyCurses()
+        curses.color_changes = []
+
+        color = app.changed_background_color(curses, 'added')
+
+        self.assertEqual(color, 100)
+        self.assertEqual(curses.color_changes, [(100, 18, 55, 34)])
+
+    def test_changed_background_color_falls_back_without_custom_palette(self):
+        app = ReviewApp.__new__(ReviewApp)
+
+        self.assertEqual(app.changed_background_color(FixedPaletteCurses(), 'added'), 22)
+
     def test_syntax_token_kind_maps_common_pygments_tokens(self):
         if tui.Name is None:
             self.skipTest('pygments is not installed')
@@ -185,11 +231,29 @@ class CliTest(unittest.TestCase):
         self.assertEqual(syntax_token_kind(tui.Operator), 'operator')
         self.assertEqual(syntax_token_kind(tui.Punctuation), 'punctuation')
 
-    def test_draw_source_row_skips_changed_and_comment_rows(self):
+    def test_draw_source_row_draws_changed_rows_with_full_width_background(self):
+        app = ReviewApp.__new__(ReviewApp)
+        app.syntax_colors = True
+        screen = FakeScreen()
+        original = tui.syntax_spans
+        tui.syntax_spans = lambda path, code: [('return', 'keyword'), (' 1\n', 'number')]
+        try:
+            row = RenderedLine('+   4 return 1', None, kind='added')
+
+            rendered = app.draw_source_row(screen, 0, 0, row, 'src/parser.py', 20, DummyCurses().color_pair(14), False, DummyCurses())
+        finally:
+            tui.syntax_spans = original
+
+        self.assertTrue(rendered)
+        self.assertEqual(screen.calls[0], (0, 0, '+   4 ', 14 * 16))
+        self.assertEqual(screen.calls[1], (0, 6, 'return', 19 * 16 | DummyCurses.A_BOLD))
+        self.assertEqual(screen.calls[2], (0, 12, ' 1', 21 * 16))
+        self.assertEqual(screen.calls[3], (0, 14, ' ' * 6, 14 * 16))
+
+    def test_draw_source_row_skips_comment_rows(self):
         app = ReviewApp.__new__(ReviewApp)
         screen = FakeScreen()
 
-        self.assertFalse(app.draw_source_row(screen, 0, 0, RenderedLine('+   4 return 1', None, kind='added'), 'src/parser.py', 80, 0, False, DummyCurses()))
         self.assertFalse(app.draw_source_row(screen, 0, 0, RenderedLine('>>> comment', None, 'LRV-001'), 'src/parser.py', 80, 0, False, DummyCurses()))
         self.assertEqual(screen.calls, [])
 
