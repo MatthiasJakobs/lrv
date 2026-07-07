@@ -34,6 +34,7 @@ COMMENT_TARGET_BG_PAIRS = {
     'open': 38,
     'superseded': 39,
 }
+CURRENT_LINE_BG_PAIR = 40
 CHANGED_BG_COLORS = {
     'added': 22,
     'deleted': 52,
@@ -42,6 +43,7 @@ COMMENT_TARGET_BG_COLORS = {
     'open': 58,
     'superseded': 24,
 }
+CURRENT_LINE_BG_COLOR = 236
 CUSTOM_CHANGED_BG_COLORS = {
     'added': 100,
     'deleted': 101,
@@ -50,6 +52,7 @@ CUSTOM_COMMENT_TARGET_BG_COLORS = {
     'open': 102,
     'superseded': 103,
 }
+CUSTOM_CURRENT_LINE_BG_COLOR = 104
 CUSTOM_CHANGED_BG_RGB = {
     'added': (18, 55, 34),
     'deleted': (70, 28, 24),
@@ -58,8 +61,25 @@ CUSTOM_COMMENT_TARGET_BG_RGB = {
     'open': (72, 62, 16),
     'superseded': (14, 52, 65),
 }
+CUSTOM_CURRENT_LINE_BG_RGB = (34, 34, 34)
 SIDEBAR_FILE_LABEL_WIDTH = 18
 SIDEBAR_COUNT_WIDTH = 4
+UNICODE_GLYPHS = {
+    'vertical': '│',
+    'top_left': '┌',
+    'top_right': '┐',
+    'bottom_left': '└',
+    'bottom_right': '┘',
+    'horizontal': '─',
+}
+ASCII_GLYPHS = {
+    'vertical': '|',
+    'top_left': '+',
+    'top_right': '+',
+    'bottom_left': '+',
+    'bottom_right': '+',
+    'horizontal': '-',
+}
 CHANGED_SYNTAX_PAIRS = {
     'added': {
         None: 16,
@@ -150,7 +170,12 @@ def render_review(repo, state):
 
 
 def lines_for_file(repo, state, file):
-    return [row.text for row in rows_for_file(repo, state, file)]
+    lines = []
+    for row in rows_for_file(repo, state, file):
+        text = plain_text_for_row(row)
+        if text is not None:
+            lines.append(text)
+    return lines
 
 
 def rows_for_file(repo, state, file):
@@ -272,10 +297,29 @@ def file_comment_count(state, path):
     return len([comment for comment in state.comments if comment.file == path and comment.state in ('open', 'superseded')])
 
 
+def active_comment_count(state):
+    return len([comment for comment in state.comments if comment.state in ('open', 'superseded')])
+
+
 def sidebar_count_segments(count, marker, attr):
     if count == 0:
         return [(' ', attr), (' ' * SIDEBAR_COUNT_WIDTH, attr)]
     return [(marker, attr), (f'{count:>{SIDEBAR_COUNT_WIDTH}}', attr)]
+
+
+def ui_glyphs():
+    if os.environ.get('LRV_ASCII'):
+        return ASCII_GLYPHS
+    return UNICODE_GLYPHS
+
+
+def status_bar_text(repo, state, files, change_counts):
+    added = sum(count[0] for count in change_counts.values())
+    removed = sum(count[1] for count in change_counts.values())
+    file_label = 'file' if len(files) == 1 else 'files'
+    note_count = active_comment_count(state)
+    note_label = 'note' if note_count == 1 else 'notes'
+    return f'lrv review  HEAD {state.base_commit or head_revision(repo)}  {len(files)} {file_label}  +{added}  -{removed}  {note_count} {note_label}'
 
 
 def refresh_superseded_comments(repo, state):
@@ -580,10 +624,24 @@ def format_inline_comment(comment):
 
 
 def inline_comment_rows(comment):
-    return [
-        RenderedLine(line, None, comment.id, comment_state=comment.state)
-        for line in format_inline_comment(comment)
+    body = comment.body.splitlines() or ['']
+    rows = [
+        RenderedLine('', None, comment.id, kind='comment_top', comment_state=comment.state),
+        RenderedLine(f'>>> {comment.id} [{comment.state}] {comment.location()}', None, comment.id, kind='comment_title', comment_state=comment.state),
     ]
+    rows.extend(RenderedLine(f'>>> {line}', None, comment.id, kind='comment_body', comment_state=comment.state) for line in body)
+    rows.append(RenderedLine('', None, comment.id, kind='comment_bottom', comment_state=comment.state))
+    return rows
+
+
+def plain_text_for_row(row):
+    if row.kind in ('comment_top', 'comment_bottom'):
+        return None
+    if row.kind == 'comment_title':
+        return row.text
+    if row.kind == 'comment_body':
+        return row.text
+    return row.text
 
 
 def source_row_parts(row):
@@ -702,6 +760,7 @@ class ReviewApp:
         self.modal_scroll = 0
         self.syntax_colors = False
         self.changed_line_backgrounds = False
+        self.current_line_background = False
         self.change_counts = {}
         self.pending_key = None
         self.last_reload_time = 0.0
@@ -843,6 +902,9 @@ class ReviewApp:
         if self.changed_line_backgrounds:
             self.init_changed_color_pairs(curses)
             self.init_comment_target_color_pairs(curses)
+        self.current_line_background = self.current_line_background_supported(curses)
+        if self.current_line_background:
+            self.init_current_line_color_pair(curses)
         self.syntax_colors = lex is not None
 
     def init_color_pair(self, curses, pair, foreground, background):
@@ -864,7 +926,14 @@ class ReviewApp:
             background = self.comment_target_background_color(curses, state)
             self.init_color_pair(curses, COMMENT_TARGET_BG_PAIRS[state], curses.COLOR_WHITE, background)
 
+    def init_current_line_color_pair(self, curses):
+        background = self.current_line_background_color(curses)
+        self.init_color_pair(curses, CURRENT_LINE_BG_PAIR, curses.COLOR_WHITE, background)
+
     def changed_line_backgrounds_supported(self, curses):
+        return getattr(curses, 'COLORS', 0) >= 256
+
+    def current_line_background_supported(self, curses):
         return getattr(curses, 'COLORS', 0) >= 256
 
     def changed_background_color(self, curses, row_kind):
@@ -888,6 +957,16 @@ class ReviewApp:
             except Exception:
                 pass
         return COMMENT_TARGET_BG_COLORS[state]
+
+    def current_line_background_color(self, curses):
+        if self.custom_changed_backgrounds_supported(curses, CUSTOM_CURRENT_LINE_BG_COLOR):
+            red, green, blue = CUSTOM_CURRENT_LINE_BG_RGB
+            try:
+                curses.init_color(CUSTOM_CURRENT_LINE_BG_COLOR, red, green, blue)
+                return CUSTOM_CURRENT_LINE_BG_COLOR
+            except Exception:
+                pass
+        return CURRENT_LINE_BG_COLOR
 
     def custom_changed_backgrounds_supported(self, curses, color):
         try:
@@ -1071,17 +1150,22 @@ class ReviewApp:
         return rendered
 
     def diff_progress_label(self):
-        lines = self.selected_file_lines()
-        if not lines:
+        rows = self.selected_file_rows()
+        if not rows:
             return '0%'
         if self.diff_line <= 0:
             return 'Top'
-        if self.diff_line >= len(lines) - 1:
+        if self.diff_line >= len(rows) - 1:
             return 'Bot'
-        return f'{round((self.diff_line + 1) * 100 / len(lines))}%'
+        return f'{round((self.diff_line + 1) * 100 / len(rows))}%'
 
     def selected_file_lines(self):
-        return [row.text for row in self.selected_file_rows()]
+        lines = []
+        for row in self.selected_file_rows():
+            text = plain_text_for_row(row)
+            if text is not None:
+                lines.append(text)
+        return lines
 
     def selected_file_rows(self):
         if not self.files:
@@ -1352,6 +1436,7 @@ class ReviewApp:
         main_x = sidebar_width + 1
 
         self.draw_header(screen, width, curses)
+        self.draw_vertical_border(screen, 1, sidebar_width, max(0, height - 1), curses)
         self.draw_sidebar(screen, height, sidebar_width, curses)
         self.draw_main(screen, height, width, main_x, curses)
         self.draw_input(screen, height, width, curses)
@@ -1359,21 +1444,29 @@ class ReviewApp:
         screen.refresh()
 
     def draw_header(self, screen, width, curses):
-        labels = {
-            'input': 'INPUT',
-            'comments': 'COMMENTS',
-            'visual': 'VISUAL',
-        }
-        mode = labels.get(self.mode, 'NORMAL')
-        title = f'lrv review  {mode}  HEAD {self.state.base_commit or head_revision(self.repo)}  tab focus  space comments  v visual  i comment  o/O line  d delete  q quit  r refresh'
+        title = status_bar_text(self.repo, self.state, self.files, self.change_counts)
         attr = curses.color_pair(7) if self.mode in ('input', 'visual') else curses.color_pair(6)
         if attr == 0:
             attr = curses.A_REVERSE
-        self.addstr(screen, 0, 0, title[:width - 1].ljust(max(0, width - 1)), attr)
+        self.addstr(screen, 0, 0, self.centered_text(title, width - 1), attr)
+
+    def centered_text(self, text, width):
+        if width <= 0:
+            return ''
+        if len(text) >= width:
+            return text[:width]
+        left = (width - len(text)) // 2
+        right = width - len(text) - left
+        return ' ' * left + text + ' ' * right
+
+    def draw_vertical_border(self, screen, y, x, height, curses):
+        glyph = ui_glyphs()['vertical']
+        for offset in range(height):
+            self.addstr(screen, y + offset, x, glyph, curses.A_DIM)
 
     def draw_sidebar(self, screen, height, width, curses):
-        attr = curses.A_BOLD | (curses.A_UNDERLINE if self.focus == 'files' else curses.A_NORMAL)
-        self.addstr(screen, 2, 1, 'Changed files', attr)
+        attr = curses.A_BOLD
+        self.addstr(screen, 2, 1, 'Review outline', attr)
         if not self.files:
             self.addstr(screen, 4, 1, 'none')
             return
@@ -1387,9 +1480,9 @@ class ReviewApp:
             added, removed = self.change_counts.get(file.path, (0, 0))
             comments = file_comment_count(self.state, file.path)
             selected = row.file_index == self.selected
-            attr = curses.color_pair(1) if selected and self.focus == 'files' else curses.A_NORMAL
+            attr = self.current_line_attr(curses) if selected and self.focus == 'files' else curses.A_NORMAL
             if selected and self.focus == 'diff':
-                attr = curses.A_BOLD
+                attr = curses.A_DIM
             self.draw_sidebar_file(screen, index + 4, 1, width - 2, row, file, added, removed, comments, attr, curses)
 
     def draw_sidebar_folder(self, screen, y, x, width, row, curses):
@@ -1398,6 +1491,8 @@ class ReviewApp:
         self.addstr(screen, y, x, label[:width], curses.A_BOLD | curses.A_DIM)
 
     def draw_sidebar_file(self, screen, y, x, width, row, file, added, removed, comments, attr, curses):
+        if attr != curses.A_NORMAL:
+            self.addstr(screen, y, x, ' ' * max(0, width), attr)
         segments = []
         segments.extend(sidebar_count_segments(added, '+', curses.color_pair(2) | curses.A_BOLD))
         segments.append((' ', curses.A_NORMAL))
@@ -1409,7 +1504,8 @@ class ReviewApp:
         indent = '  ' * row.depth
         prefix = f'{indent}{file.status} '
         prefix = prefix[:label_width]
-        self.addstr(screen, y, x, prefix, curses.A_NORMAL)
+        row_attr = attr if attr != curses.A_NORMAL else curses.A_NORMAL
+        self.addstr(screen, y, x, prefix, row_attr)
         name_width = max(0, label_width - len(prefix))
         name = row.name
         if len(name) > name_width:
@@ -1418,12 +1514,17 @@ class ReviewApp:
         column = x + label_width
         if label_width > 0:
             gap = max(1, width - label_width - stats_width)
-            self.addstr(screen, y, column, ' ' * gap, curses.A_NORMAL)
+            self.addstr(screen, y, column, ' ' * gap, row_attr)
             column += gap
         for text, segment_attr in segments:
             if column - x >= width:
                 break
             value = text[:max(0, width - (column - x))]
+            if attr != curses.A_NORMAL:
+                if attr == curses.color_pair(CURRENT_LINE_BG_PAIR):
+                    segment_attr = attr
+                else:
+                    segment_attr |= attr
             self.addstr(screen, y, column, value, segment_attr)
             column += len(value)
 
@@ -1433,8 +1534,8 @@ class ReviewApp:
             return
 
         file = self.files[self.selected]
-        title = f'{file.status} {file.path}'
-        attr = curses.A_BOLD | (curses.A_UNDERLINE if self.focus == 'diff' else curses.A_NORMAL)
+        title = file.path
+        attr = curses.A_BOLD
         self.addstr(screen, 2, x, title[:width - x - 1], attr)
         rows = self.selected_file_rows()
         display_rows = self.rows_with_visual_selection(rows)
@@ -1450,17 +1551,42 @@ class ReviewApp:
         for index, row in enumerate(visible):
             attr = self.line_attr(curses, row)
             selected = self.focus == 'diff' and self.scroll + index == self.diff_line
+            if row.kind.startswith('comment_'):
+                self.draw_comment_box_row(screen, index + 4, x, row, text_width, attr, selected, curses)
+                continue
             if self.draw_source_row(screen, index + 4, x, row, file.path, text_width, attr, selected, curses):
                 continue
             if self.focus == 'diff' and self.scroll + index == self.diff_line:
-                attr |= self.current_line_attr(curses)
-            self.addstr(screen, index + 4, x, row.text[:text_width], attr)
+                attr = self.selected_line_attr(curses, attr)
+            value = row.text[:text_width]
+            if selected:
+                value = value.ljust(max(0, text_width))
+            self.addstr(screen, index + 4, x, value, attr)
 
         if minimap_x is not None:
             self.draw_minimap(screen, display_rows, 4, minimap_x, visible_height, curses)
 
         footer = self.status_message or self.diff_progress_label()
         self.addstr(screen, height - 1, x, footer[:max(0, width - x - 1)], curses.A_BOLD)
+
+    def draw_comment_box_row(self, screen, y, x, row, width, attr, selected, curses):
+        if width <= 0:
+            return
+        if selected:
+            attr = self.selected_line_attr(curses, attr)
+        glyphs = ui_glyphs()
+        if row.kind == 'comment_top':
+            value = glyphs['top_left'] + glyphs['horizontal'] * max(0, width - 2) + glyphs['top_right']
+        elif row.kind == 'comment_bottom':
+            value = glyphs['bottom_left'] + glyphs['horizontal'] * max(0, width - 2) + glyphs['bottom_right']
+        else:
+            text = row.text[4:] if row.text.startswith('>>> ') else row.text
+            content = f' {text} '
+            if row.kind == 'comment_title':
+                content = f' Note - {text} '
+            inner_width = max(0, width - 2)
+            value = glyphs['vertical'] + content[:inner_width].ljust(inner_width) + glyphs['vertical']
+        self.addstr(screen, y, x, value[:width], attr)
 
     def minimap_x(self, width, main_x):
         if width - main_x < 44:
@@ -1569,7 +1695,7 @@ class ReviewApp:
 
     def line_attr(self, curses, row):
         line = row.text
-        if line.startswith('>>>'):
+        if row.comment_id is not None or row.kind.startswith('comment_'):
             return self.comment_state_attr(curses, row.comment_state or 'open')
         if row.kind == 'visual':
             return curses.color_pair(8) | curses.A_BOLD
@@ -1594,7 +1720,14 @@ class ReviewApp:
         return curses.A_NORMAL
 
     def current_line_attr(self, curses):
-        return curses.A_BOLD | curses.A_UNDERLINE
+        if getattr(self, 'current_line_background', False):
+            return curses.color_pair(CURRENT_LINE_BG_PAIR)
+        return curses.A_DIM
+
+    def selected_line_attr(self, curses, base_attr):
+        if getattr(self, 'current_line_background', False):
+            return self.current_line_attr(curses)
+        return base_attr | self.current_line_attr(curses)
 
     def draw_source_row(self, screen, y, x, row, path, width, base_attr, selected, curses):
         if not getattr(self, 'syntax_colors', False):
@@ -1603,11 +1736,12 @@ class ReviewApp:
         if parts is None or width <= 0:
             return False
         prefix, code = parts
-        selected_attr = self.current_line_attr(curses) if selected else curses.A_NORMAL
-        attr = base_attr | selected_attr
+        attr = self.selected_line_attr(curses, base_attr) if selected else base_attr
         if row.target_comment_state is not None:
             self.addstr(screen, y, x, row.text[:width].ljust(width), attr)
             return True
+        if selected:
+            self.addstr(screen, y, x, ' ' * width, attr)
         self.addstr(screen, y, x, prefix[:width], attr)
         column = x + min(len(prefix), width)
         remaining = width - min(len(prefix), width)
@@ -1621,7 +1755,7 @@ class ReviewApp:
                 continue
             span_attr = self.syntax_attr(curses, kind, base_attr)
             if selected:
-                span_attr |= selected_attr
+                span_attr = self.selected_line_attr(curses, span_attr)
             self.addstr(screen, y, column, value, span_attr)
             column += len(value)
             remaining -= len(value)

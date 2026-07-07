@@ -37,6 +37,19 @@ class DummyCurses:
     COLOR_WHITE = 7
     COLORS = 256
     color_changes = []
+    pairs = []
+
+    def has_colors(self):
+        return True
+
+    def start_color(self):
+        self.started_color = True
+
+    def use_default_colors(self):
+        self.default_colors = True
+
+    def init_pair(self, pair, foreground, background):
+        self.pairs.append((pair, foreground, background))
 
     def curs_set(self, visible):
         self.cursor_visible = visible
@@ -161,21 +174,28 @@ class CliTest(unittest.TestCase):
         self.assertIn((4, 32, '*', curses.color_pair(11) | DummyCurses.A_BOLD), screen.calls)
         self.assertIn((4, 33, '   2', curses.color_pair(11) | DummyCurses.A_BOLD), screen.calls)
 
-    def test_draw_sidebar_file_highlights_only_file_name(self):
+    def test_draw_sidebar_file_highlights_whole_row(self):
         app = ReviewApp.__new__(ReviewApp)
         screen = FakeScreen()
         curses = DummyCurses()
         row = tui.SidebarRow('file', 'src/parser.py', 'parser.py', 1, 0)
         file = tui.ChangedFile('src/parser.py', 'M')
-        selected_attr = curses.color_pair(1)
+        selected_attr = DummyCurses.A_DIM
 
         app.draw_sidebar_file(screen, 4, 1, 36, row, file, 33, 15, 2, selected_attr, curses)
 
-        self.assertIn((4, 1, '  M ', DummyCurses.A_NORMAL), screen.calls)
+        self.assertIn((4, 1, ' ' * 36, selected_attr), screen.calls)
+        self.assertIn((4, 1, '  M ', selected_attr), screen.calls)
         self.assertIn((4, 5, 'parser.py', selected_attr), screen.calls)
-        self.assertIn((4, 19, ' ', DummyCurses.A_NORMAL), screen.calls)
-        self.assertIn((4, 25, ' ', DummyCurses.A_NORMAL), screen.calls)
-        self.assertIn((4, 31, ' ', DummyCurses.A_NORMAL), screen.calls)
+        self.assertIn((4, 19, ' ', selected_attr), screen.calls)
+        self.assertIn((4, 20, '+', curses.color_pair(2) | DummyCurses.A_BOLD | selected_attr), screen.calls)
+        self.assertIn((4, 21, '  33', curses.color_pair(2) | DummyCurses.A_BOLD | selected_attr), screen.calls)
+        self.assertIn((4, 25, ' ', selected_attr), screen.calls)
+        self.assertIn((4, 26, '-', curses.color_pair(3) | DummyCurses.A_BOLD | selected_attr), screen.calls)
+        self.assertIn((4, 27, '  15', curses.color_pair(3) | DummyCurses.A_BOLD | selected_attr), screen.calls)
+        self.assertIn((4, 31, ' ', selected_attr), screen.calls)
+        self.assertIn((4, 32, '*', curses.color_pair(11) | DummyCurses.A_BOLD | selected_attr), screen.calls)
+        self.assertIn((4, 33, '   2', curses.color_pair(11) | DummyCurses.A_BOLD | selected_attr), screen.calls)
 
     def test_draw_sidebar_file_hides_zero_counts_but_keeps_columns(self):
         app = ReviewApp.__new__(ReviewApp)
@@ -274,9 +294,31 @@ class CliTest(unittest.TestCase):
 
     def test_current_line_attr_is_subtle(self):
         app = ReviewApp.__new__(ReviewApp)
+        app.current_line_background = True
 
         self.assertEqual(app.line_attr(DummyCurses(), RenderedLine('   40 code', None, kind='unchanged')), DummyCurses.A_NORMAL)
-        self.assertEqual(app.current_line_attr(DummyCurses()), DummyCurses.A_BOLD | DummyCurses.A_UNDERLINE)
+        self.assertEqual(app.current_line_attr(DummyCurses()), DummyCurses().color_pair(tui.CURRENT_LINE_BG_PAIR))
+
+    def test_current_line_attr_falls_back_to_dim_without_background(self):
+        app = ReviewApp.__new__(ReviewApp)
+        app.current_line_background = False
+
+        self.assertEqual(app.current_line_attr(DummyCurses()), DummyCurses.A_DIM)
+
+    def test_current_line_background_color_uses_muted_custom_color_when_supported(self):
+        app = ReviewApp.__new__(ReviewApp)
+        curses = DummyCurses()
+        curses.color_changes = []
+
+        color = app.current_line_background_color(curses)
+
+        self.assertEqual(color, 104)
+        self.assertEqual(curses.color_changes, [(104, 34, 34, 34)])
+
+    def test_current_line_background_color_falls_back_without_custom_palette(self):
+        app = ReviewApp.__new__(ReviewApp)
+
+        self.assertEqual(app.current_line_background_color(FixedPaletteCurses()), 236)
 
     def test_inline_comment_rows_keep_comment_state(self):
         comment = Comment(
@@ -293,7 +335,8 @@ class CliTest(unittest.TestCase):
 
         rows = tui.inline_comment_rows(comment)
 
-        self.assertEqual([row.comment_state for row in rows], ['superseded', 'superseded'])
+        self.assertEqual([row.comment_state for row in rows], ['superseded', 'superseded', 'superseded', 'superseded'])
+        self.assertEqual([row.kind for row in rows], ['comment_top', 'comment_title', 'comment_body', 'comment_bottom'])
 
     def test_inline_comment_attr_uses_modal_state_colors(self):
         app = ReviewApp.__new__(ReviewApp)
@@ -306,9 +349,60 @@ class CliTest(unittest.TestCase):
             'dismissed': curses.color_pair(3),
         }
         for state, attr in states.items():
-            row = RenderedLine('>>> comment', None, 'LRV-001', comment_state=state)
+            row = RenderedLine('comment', None, 'LRV-001', kind='comment_body', comment_state=state)
 
             self.assertEqual(app.line_attr(curses, row), attr)
+
+    def test_plain_text_for_comment_rows_preserves_cli_comment_format(self):
+        rows = [
+            RenderedLine('', None, 'LRV-001', kind='comment_top', comment_state='open'),
+            RenderedLine('>>> LRV-001 [open] src/parser.py:4', None, 'LRV-001', kind='comment_title', comment_state='open'),
+            RenderedLine('>>> Check this.', None, 'LRV-001', kind='comment_body', comment_state='open'),
+            RenderedLine('', None, 'LRV-001', kind='comment_bottom', comment_state='open'),
+        ]
+
+        self.assertEqual([tui.plain_text_for_row(row) for row in rows], [None, '>>> LRV-001 [open] src/parser.py:4', '>>> Check this.', None])
+
+    def test_draw_comment_box_row_uses_full_width_unicode_border(self):
+        app = ReviewApp.__new__(ReviewApp)
+        screen = FakeScreen()
+        curses = DummyCurses()
+
+        app.draw_comment_box_row(screen, 2, 4, RenderedLine('', None, 'LRV-001', kind='comment_top', comment_state='open'), 12, curses.color_pair(5), False, curses)
+        app.draw_comment_box_row(screen, 3, 4, RenderedLine('>>> LRV-001 [open] src/parser.py:4', None, 'LRV-001', kind='comment_title', comment_state='open'), 12, curses.color_pair(5), False, curses)
+        app.draw_comment_box_row(screen, 4, 4, RenderedLine('', None, 'LRV-001', kind='comment_bottom', comment_state='open'), 12, curses.color_pair(5), False, curses)
+
+        self.assertEqual(screen.calls[0], (2, 4, '┌──────────┐', curses.color_pair(5)))
+        self.assertEqual(screen.calls[1], (3, 4, '│ Note - LR│', curses.color_pair(5)))
+        self.assertEqual(screen.calls[2], (4, 4, '└──────────┘', curses.color_pair(5)))
+
+    def test_ui_glyphs_can_fallback_to_ascii(self):
+        original = os.environ.get('LRV_ASCII')
+        os.environ['LRV_ASCII'] = '1'
+        try:
+            self.assertEqual(tui.ui_glyphs()['vertical'], '|')
+            self.assertEqual(tui.ui_glyphs()['horizontal'], '-')
+        finally:
+            if original is None:
+                os.environ.pop('LRV_ASCII', None)
+            else:
+                os.environ['LRV_ASCII'] = original
+
+    def test_status_bar_text_is_pure_review_status(self):
+        state = ReviewState(version=1, repo_root='', base_commit='abc123', comments=())
+        files = [tui.ChangedFile('src/parser.py', 'M'), tui.ChangedFile('src/taxes.py', 'M')]
+        change_counts = {
+            'src/parser.py': (4, 1),
+            'src/taxes.py': (2, 3),
+        }
+
+        self.assertEqual(tui.status_bar_text(ROOT, state, files, change_counts), 'lrv review  HEAD abc123  2 files  +6  -4  0 notes')
+
+    def test_centered_text_pads_status_evenly(self):
+        app = ReviewApp.__new__(ReviewApp)
+
+        self.assertEqual(app.centered_text('status', 10), '  status  ')
+        self.assertEqual(app.centered_text('long status', 4), 'long')
 
     def test_comment_target_attr_uses_background_colors_when_supported(self):
         app = ReviewApp.__new__(ReviewApp)
@@ -414,7 +508,7 @@ class CliTest(unittest.TestCase):
             tui.syntax_spans = original
 
         self.assertTrue(rendered)
-        self.assertEqual(screen.calls, [(0, 0, '+   4 return 1      ', 38 * 16 | DummyCurses.A_BOLD | DummyCurses.A_UNDERLINE)])
+        self.assertEqual(screen.calls, [(0, 0, '+   4 return 1      ', 38 * 16 | DummyCurses.A_DIM)])
 
     def test_draw_source_row_skips_comment_rows(self):
         app = ReviewApp.__new__(ReviewApp)
@@ -515,7 +609,7 @@ class CliTest(unittest.TestCase):
             repo = Path(temp) / 'repo'
             materialize('python-review-basic', repo)
             app = ReviewApp(repo, load_state(repo))
-            line_count = len(app.selected_file_lines())
+            line_count = len(app.selected_file_rows())
 
             app.diff_line = 0
             self.assertEqual(app.diff_progress_label(), 'Top')
@@ -846,7 +940,7 @@ class CliTest(unittest.TestCase):
 
         rendered = tui.rows_with_comments(rows, [comment])
 
-        self.assertEqual([row.text for row in rendered], [
+        self.assertEqual([tui.plain_text_for_row(row) for row in rendered if tui.plain_text_for_row(row) is not None], [
             '    10 code',
             '    11 code',
             '    12 code',
