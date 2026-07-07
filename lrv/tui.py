@@ -30,17 +30,33 @@ CHANGED_BG_PAIRS = {
     'added': 14,
     'deleted': 15,
 }
+COMMENT_TARGET_BG_PAIRS = {
+    'open': 38,
+    'superseded': 39,
+}
 CHANGED_BG_COLORS = {
     'added': 22,
     'deleted': 52,
+}
+COMMENT_TARGET_BG_COLORS = {
+    'open': 58,
+    'superseded': 24,
 }
 CUSTOM_CHANGED_BG_COLORS = {
     'added': 100,
     'deleted': 101,
 }
+CUSTOM_COMMENT_TARGET_BG_COLORS = {
+    'open': 102,
+    'superseded': 103,
+}
 CUSTOM_CHANGED_BG_RGB = {
     'added': (18, 55, 34),
     'deleted': (70, 28, 24),
+}
+CUSTOM_COMMENT_TARGET_BG_RGB = {
+    'open': (72, 62, 16),
+    'superseded': (14, 52, 65),
 }
 SIDEBAR_FILE_LABEL_WIDTH = 18
 SIDEBAR_COUNT_WIDTH = 4
@@ -85,6 +101,11 @@ CHANGED_SYNTAX_PAIRS = {
         'punctuation': 36,
         'generic': 37,
     },
+}
+COMMENT_TARGET_STATES = ('open', 'superseded')
+COMMENT_STATE_PRIORITY = {
+    'open': 0,
+    'superseded': 1,
 }
 
 
@@ -139,11 +160,11 @@ def rows_for_file(repo, state, file):
         rows = full_file_rows(repo, file)
         if not rows:
             return [RenderedLine('(no diff)', None)]
-        return rows_with_comments(rows, comments)
+        return rows_with_comments(rows_with_comment_targets(rows, comments), comments)
 
     rendered = []
     seen = set()
-    diff_rows = full_rows_for_file(repo, file, diff_lines)
+    diff_rows = rows_with_comment_targets(full_rows_for_file(repo, file, diff_lines), comments)
 
     for row in diff_rows:
         for comment in matching_row_comments(comments, seen, row, 'before'):
@@ -181,6 +202,32 @@ def rows_with_comments(rows, comments):
         if comment.id not in seen:
             rendered.extend(inline_comment_rows(comment))
     return rendered
+
+
+def rows_with_comment_targets(rows, comments):
+    active = [comment for comment in comments if comment.state in COMMENT_TARGET_STATES]
+    if not active:
+        return rows
+    rendered = []
+    for row in rows:
+        state = target_comment_state_for_row(row, active)
+        rendered.append(RenderedLine(row.text, row.anchor, row.comment_id, row.kind, row.comment_state, state))
+    return rendered
+
+
+def target_comment_state_for_row(row, comments):
+    if row.anchor is None:
+        return None
+    old_target = row.anchor.line if row.anchor.side == 'old' else None
+    new_target = row.anchor.line if row.anchor.side == 'new' else None
+    matches = [
+        comment.state
+        for comment in comments
+        if comment_matches_line(comment, old_target, new_target)
+    ]
+    if not matches:
+        return None
+    return min(matches, key=lambda state: COMMENT_STATE_PRIORITY[state])
 
 
 def review_files(repo, state):
@@ -319,9 +366,19 @@ def matching_row_comments(comments, seen, row, placement):
         comment
         for comment in comments
         if comment.id not in seen
-        and comment.placement == placement
-        and comment_matches_line(comment, old_target, new_target)
+        and comment_matches_inline_position(comment, old_target, new_target, placement)
     ]
+
+
+def comment_matches_inline_position(comment, old_line, new_line, placement):
+    if comment.line_range.start != comment.line_range.end:
+        return placement == 'after' and comment_matches_exact_line(comment, old_line, new_line, comment.line_range.end)
+    return comment.placement == placement and comment_matches_line(comment, old_line, new_line)
+
+
+def comment_matches_exact_line(comment, old_line, new_line, line):
+    target = old_line if comment.side == 'old' else new_line
+    return target == line
 
 
 def diff_rows_for_file(path, diff_lines):
@@ -416,7 +473,7 @@ def minimap_kind(rows):
     kinds = {row.kind for row in rows}
     if 'visual' in kinds:
         return 'visual'
-    if any(row.comment_id is not None or row.text.startswith('>>>') for row in rows):
+    if any(row.comment_id is not None or row.text.startswith('>>>') or row.target_comment_state is not None for row in rows):
         return 'comment'
     if 'added' in kinds and 'deleted' in kinds:
         return 'mixed'
@@ -587,12 +644,13 @@ def syntax_spans(path, code):
 
 
 class RenderedLine:
-    def __init__(self, text, anchor, comment_id=None, kind='normal', comment_state=None):
+    def __init__(self, text, anchor, comment_id=None, kind='normal', comment_state=None, target_comment_state=None):
         self.text = text
         self.anchor = anchor
         self.comment_id = comment_id
         self.kind = kind
         self.comment_state = comment_state
+        self.target_comment_state = target_comment_state
 
 
 class SidebarRow:
@@ -784,6 +842,7 @@ class ReviewApp:
         self.changed_line_backgrounds = self.changed_line_backgrounds_supported(curses)
         if self.changed_line_backgrounds:
             self.init_changed_color_pairs(curses)
+            self.init_comment_target_color_pairs(curses)
         self.syntax_colors = lex is not None
 
     def init_color_pair(self, curses, pair, foreground, background):
@@ -800,6 +859,11 @@ class ReviewApp:
                 foreground = self.syntax_foreground(curses, kind)
                 self.init_color_pair(curses, pair, foreground, background)
 
+    def init_comment_target_color_pairs(self, curses):
+        for state in COMMENT_TARGET_BG_PAIRS:
+            background = self.comment_target_background_color(curses, state)
+            self.init_color_pair(curses, COMMENT_TARGET_BG_PAIRS[state], curses.COLOR_WHITE, background)
+
     def changed_line_backgrounds_supported(self, curses):
         return getattr(curses, 'COLORS', 0) >= 256
 
@@ -813,6 +877,17 @@ class ReviewApp:
             except Exception:
                 pass
         return CHANGED_BG_COLORS[row_kind]
+
+    def comment_target_background_color(self, curses, state):
+        custom = CUSTOM_COMMENT_TARGET_BG_COLORS[state]
+        if self.custom_changed_backgrounds_supported(curses, custom):
+            red, green, blue = CUSTOM_COMMENT_TARGET_BG_RGB[state]
+            try:
+                curses.init_color(custom, red, green, blue)
+                return custom
+            except Exception:
+                pass
+        return COMMENT_TARGET_BG_COLORS[state]
 
     def custom_changed_backgrounds_supported(self, curses, color):
         try:
@@ -992,7 +1067,7 @@ class ReviewApp:
         rendered = []
         for index, row in enumerate(rows):
             kind = 'visual' if index in indexes and row.anchor is not None else row.kind
-            rendered.append(RenderedLine(row.text, row.anchor, row.comment_id, kind, row.comment_state))
+            rendered.append(RenderedLine(row.text, row.anchor, row.comment_id, kind, row.comment_state, row.target_comment_state))
         return rendered
 
     def diff_progress_label(self):
@@ -1142,7 +1217,11 @@ class ReviewApp:
         if not rows:
             return None
         index = max(0, min(len(rows) - 1, self.diff_line))
-        comment_id = rows[index].comment_id
+        comment_id = None
+        for i in range(index, -1, -1):
+            if rows[i].comment_id is not None:
+                comment_id = rows[i].comment_id
+                break
         if comment_id is None:
             return None
         for comment in self.state.comments:
@@ -1218,7 +1297,7 @@ class ReviewApp:
                 anchor.line,
                 anchor.hunk,
                 body,
-                placement=self.input_placement,
+                placement=self.saved_input_placement(anchor),
                 end_line=self.input_end_line,
                 anchor_kind=anchor_kind_value,
                 file_anchor=file_anchor,
@@ -1228,6 +1307,12 @@ class ReviewApp:
             self.reload(target_anchor=anchor, target_scroll=scroll)
             return
         self.cancel_input(curses)
+
+    def saved_input_placement(self, anchor):
+        end_line = self.input_end_line if self.input_end_line is not None else anchor.line
+        if end_line != anchor.line:
+            return 'after'
+        return self.input_placement
 
     def delete_selected_comment(self):
         rows = self.selected_file_rows()
@@ -1473,12 +1558,23 @@ class ReviewApp:
             return curses.color_pair(3)
         return curses.A_NORMAL
 
+    def comment_target_state_attr(self, curses, state):
+        if getattr(self, 'changed_line_backgrounds', False):
+            return curses.color_pair(COMMENT_TARGET_BG_PAIRS[state])
+        if state == 'open':
+            return curses.color_pair(5)
+        if state == 'superseded':
+            return curses.color_pair(4)
+        return curses.A_NORMAL
+
     def line_attr(self, curses, row):
         line = row.text
         if line.startswith('>>>'):
             return self.comment_state_attr(curses, row.comment_state or 'open')
         if row.kind == 'visual':
             return curses.color_pair(8) | curses.A_BOLD
+        if row.target_comment_state is not None:
+            return self.comment_target_state_attr(curses, row.target_comment_state)
         if row.kind == 'added':
             if self.changed_line_backgrounds:
                 return curses.color_pair(CHANGED_BG_PAIRS['added'])
@@ -1509,6 +1605,9 @@ class ReviewApp:
         prefix, code = parts
         selected_attr = self.current_line_attr(curses) if selected else curses.A_NORMAL
         attr = base_attr | selected_attr
+        if row.target_comment_state is not None:
+            self.addstr(screen, y, x, row.text[:width].ljust(width), attr)
+            return True
         self.addstr(screen, y, x, prefix[:width], attr)
         column = x + min(len(prefix), width)
         remaining = width - min(len(prefix), width)

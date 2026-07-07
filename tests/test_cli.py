@@ -205,6 +205,14 @@ class CliTest(unittest.TestCase):
         self.assertEqual(minimap_buckets(rows, 5), ['unchanged', 'added', 'deleted', 'comment', 'visual'])
         self.assertEqual(minimap_buckets(rows[1:3], 1), ['mixed'])
 
+    def test_minimap_buckets_treat_target_lines_as_comments(self):
+        rows = [
+            RenderedLine('    1 unchanged', None, kind='unchanged'),
+            RenderedLine('    2 target', None, kind='unchanged', target_comment_state='open'),
+        ]
+
+        self.assertEqual(minimap_buckets(rows, 2), ['unchanged', 'comment'])
+
     def test_minimap_viewport_maps_scroll_to_compressed_rows(self):
         self.assertEqual(minimap_viewport(100, 0, 20, 10), (0, 1))
         self.assertEqual(minimap_viewport(100, 50, 20, 10), (5, 6))
@@ -302,6 +310,31 @@ class CliTest(unittest.TestCase):
 
             self.assertEqual(app.line_attr(curses, row), attr)
 
+    def test_comment_target_attr_uses_background_colors_when_supported(self):
+        app = ReviewApp.__new__(ReviewApp)
+        app.changed_line_backgrounds = True
+        curses = DummyCurses()
+
+        self.assertEqual(app.line_attr(curses, RenderedLine('    4 code', None, kind='unchanged', target_comment_state='open')), curses.color_pair(38))
+        self.assertEqual(app.line_attr(curses, RenderedLine('    4 code', None, kind='unchanged', target_comment_state='superseded')), curses.color_pair(39))
+
+    def test_comment_target_attr_falls_back_to_state_colors_without_backgrounds(self):
+        app = ReviewApp.__new__(ReviewApp)
+        app.changed_line_backgrounds = False
+        curses = DummyCurses()
+
+        self.assertEqual(app.line_attr(curses, RenderedLine('    4 code', None, kind='unchanged', target_comment_state='open')), curses.color_pair(5))
+        self.assertEqual(app.line_attr(curses, RenderedLine('    4 code', None, kind='unchanged', target_comment_state='superseded')), curses.color_pair(4))
+
+    def test_comment_target_attr_overrides_changed_line_backgrounds(self):
+        app = ReviewApp.__new__(ReviewApp)
+        app.changed_line_backgrounds = True
+        curses = DummyCurses()
+
+        row = RenderedLine('+   4 code', None, kind='added', target_comment_state='open')
+
+        self.assertEqual(app.line_attr(curses, row), curses.color_pair(38))
+
     def test_changed_line_backgrounds_require_extended_colors(self):
         app = ReviewApp.__new__(ReviewApp)
 
@@ -322,6 +355,21 @@ class CliTest(unittest.TestCase):
         app = ReviewApp.__new__(ReviewApp)
 
         self.assertEqual(app.changed_background_color(FixedPaletteCurses(), 'added'), 22)
+
+    def test_comment_target_background_color_uses_muted_custom_color_when_supported(self):
+        app = ReviewApp.__new__(ReviewApp)
+        curses = DummyCurses()
+        curses.color_changes = []
+
+        color = app.comment_target_background_color(curses, 'open')
+
+        self.assertEqual(color, 102)
+        self.assertEqual(curses.color_changes, [(102, 72, 62, 16)])
+
+    def test_comment_target_background_color_falls_back_without_custom_palette(self):
+        app = ReviewApp.__new__(ReviewApp)
+
+        self.assertEqual(app.comment_target_background_color(FixedPaletteCurses(), 'superseded'), 24)
 
     def test_syntax_token_kind_maps_common_pygments_tokens(self):
         if tui.Name is None:
@@ -351,6 +399,22 @@ class CliTest(unittest.TestCase):
         self.assertEqual(screen.calls[1], (0, 6, 'return', 19 * 16 | DummyCurses.A_BOLD))
         self.assertEqual(screen.calls[2], (0, 12, ' 1', 21 * 16))
         self.assertEqual(screen.calls[3], (0, 14, ' ' * 6, 14 * 16))
+
+    def test_draw_source_row_uses_comment_target_color_for_whole_row(self):
+        app = ReviewApp.__new__(ReviewApp)
+        app.syntax_colors = True
+        screen = FakeScreen()
+        original = tui.syntax_spans
+        tui.syntax_spans = lambda path, code: [('return', 'keyword')]
+        try:
+            row = RenderedLine('+   4 return 1', None, kind='added', target_comment_state='open')
+
+            rendered = app.draw_source_row(screen, 0, 0, row, 'src/parser.py', 20, DummyCurses().color_pair(38), True, DummyCurses())
+        finally:
+            tui.syntax_spans = original
+
+        self.assertTrue(rendered)
+        self.assertEqual(screen.calls, [(0, 0, '+   4 return 1      ', 38 * 16 | DummyCurses.A_BOLD | DummyCurses.A_UNDERLINE)])
 
     def test_draw_source_row_skips_comment_rows(self):
         app = ReviewApp.__new__(ReviewApp)
@@ -642,6 +706,66 @@ class CliTest(unittest.TestCase):
             visual_indexes = [index for index, row in enumerate(rendered) if row.kind == 'visual']
             self.assertEqual(visual_indexes, [app.visual_anchor, app.diff_line])
 
+    def test_tui_visual_mode_overrides_comment_target_color(self):
+        app = ReviewApp.__new__(ReviewApp)
+        app.mode = 'visual'
+        app.visual_anchor = 0
+        app.diff_line = 0
+        rows = [
+            RenderedLine('    4 code', tui.DiffAnchor('src/parser.py', 'new', 4, None), kind='unchanged', target_comment_state='open'),
+        ]
+        app.selected_file_rows = lambda: rows
+
+        rendered = app.rows_with_visual_selection(rows)
+
+        self.assertEqual(rendered[0].kind, 'visual')
+        self.assertEqual(app.line_attr(DummyCurses(), rendered[0]), DummyCurses().color_pair(8) | DummyCurses.A_BOLD)
+
+    def test_rows_with_comment_targets_splits_overlapping_ranges_by_priority(self):
+        rows = [
+            RenderedLine(f'    {line} code', tui.DiffAnchor('src/parser.py', 'new', line, None), kind='unchanged')
+            for line in range(10, 16)
+        ]
+        comments = [
+            Comment(
+                id='LRV-101',
+                state='superseded',
+                file='src/parser.py',
+                side='new',
+                line_range=LineRange(10, 15),
+                hunk=None,
+                body='Outer.',
+                created_at='2026-07-04T10:00:00Z',
+                updated_at='2026-07-04T10:00:00Z',
+            ),
+            Comment(
+                id='LRV-102',
+                state='open',
+                file='src/parser.py',
+                side='new',
+                line_range=LineRange(12, 13),
+                hunk=None,
+                body='Inner.',
+                created_at='2026-07-04T10:00:00Z',
+                updated_at='2026-07-04T10:00:00Z',
+            ),
+            Comment(
+                id='LRV-103',
+                state='dismissed',
+                file='src/parser.py',
+                side='new',
+                line_range=LineRange(14, 14),
+                hunk=None,
+                body='Hidden.',
+                created_at='2026-07-04T10:00:00Z',
+                updated_at='2026-07-04T10:00:00Z',
+            ),
+        ]
+
+        rendered = tui.rows_with_comment_targets(rows, comments)
+
+        self.assertEqual([row.target_comment_state for row in rendered], ['superseded', 'superseded', 'open', 'open', 'superseded', 'superseded'])
+
     def test_tui_visual_mode_starts_on_unchanged_line_outside_hunk(self):
         with tempfile.TemporaryDirectory() as temp:
             repo = Path(temp) / 'repo'
@@ -701,6 +825,58 @@ class CliTest(unittest.TestCase):
             self.assertEqual(comment.line_range.start, 250)
             self.assertEqual(comment.line_range.end, 252)
             self.assertEqual(comment.file_anchor.snapshot, 'LINE_250 = 250\nLINE_251 = 251\nLINE_252 = 252')
+
+    def test_multiline_comments_render_after_final_target_line(self):
+        rows = [
+            RenderedLine(f'    {line} code', tui.DiffAnchor('src/parser.py', 'new', line, None), kind='unchanged')
+            for line in range(10, 13)
+        ]
+        comment = Comment(
+            id='LRV-101',
+            state='open',
+            file='src/parser.py',
+            side='new',
+            line_range=LineRange(10, 12),
+            hunk=None,
+            body='Range note.',
+            created_at='2026-07-04T10:00:00Z',
+            updated_at='2026-07-04T10:00:00Z',
+            placement='before',
+        )
+
+        rendered = tui.rows_with_comments(rows, [comment])
+
+        self.assertEqual([row.text for row in rendered], [
+            '    10 code',
+            '    11 code',
+            '    12 code',
+            '>>> LRV-101 [open] src/parser.py:10-12',
+            '>>> Range note.',
+        ])
+
+    def test_tui_visual_mode_saves_multiline_comment_after_range(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            self.select_file(app, 'src/parser.py')
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = self.row_index_ending(rows, '        return 1')
+
+            app.start_visual()
+            app.move_down()
+            app.start_visual_input(DummyCurses())
+            app.input_placement = 'before'
+            app.input_text = 'Keep the range together.'
+            app.save_input(DummyCurses())
+
+            comment = load_state(repo).comments[-1]
+            lines = app.selected_file_lines()
+            comment_index = next(index for index, line in enumerate(lines) if line == '>>> Keep the range together.')
+            target_index = self.line_index_ending(lines, '    return value')
+            self.assertEqual(comment.placement, 'after')
+            self.assertGreater(comment_index, target_index)
 
     def test_tui_visual_mode_rejects_mixed_hunk_and_file_anchor_ranges(self):
         with tempfile.TemporaryDirectory() as temp:
