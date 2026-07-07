@@ -7,6 +7,7 @@ import time
 
 from lrv.git import ChangedFile, changed_files, file_diff, file_lines, head_revision
 from lrv.state import FileAnchor, HunkSnapshot, ReviewState, append_comment, load_state, mark_comments_superseded, remove_comment, save_state, set_comment_state, update_comment_body, update_comment_line_range
+from lrv.theme import CUSTOM_COLOR_IDS, FALLBACK_COLOR_NAMES, default_theme, hex_to_curses_rgb, hex_to_xterm_256, load_theme
 
 try:
     from pygments import lex
@@ -35,6 +36,19 @@ COMMENT_TARGET_BG_PAIRS = {
     'superseded': 39,
 }
 CURRENT_LINE_BG_PAIR = 40
+COMMENT_STATE_FG_PAIRS = {
+    'open': 5,
+    'superseded': 41,
+    'resolved': 42,
+    'dismissed': 43,
+}
+SYNTAX_PLAIN_PAIRS = {
+    'builtin': 44,
+    'constant': 44,
+    'operator': 45,
+    'punctuation': 45,
+    'generic': 46,
+}
 CHANGED_BG_COLORS = {
     'added': 22,
     'deleted': 52,
@@ -44,24 +58,6 @@ COMMENT_TARGET_BG_COLORS = {
     'superseded': 24,
 }
 CURRENT_LINE_BG_COLOR = 236
-CUSTOM_CHANGED_BG_COLORS = {
-    'added': 100,
-    'deleted': 101,
-}
-CUSTOM_COMMENT_TARGET_BG_COLORS = {
-    'open': 102,
-    'superseded': 103,
-}
-CUSTOM_CURRENT_LINE_BG_COLOR = 104
-CUSTOM_CHANGED_BG_RGB = {
-    'added': (18, 55, 34),
-    'deleted': (70, 28, 24),
-}
-CUSTOM_COMMENT_TARGET_BG_RGB = {
-    'open': (72, 62, 16),
-    'superseded': (14, 52, 65),
-}
-CUSTOM_CURRENT_LINE_BG_RGB = (34, 34, 34)
 SIDEBAR_FILE_LABEL_WIDTH = 18
 SIDEBAR_COUNT_WIDTH = 4
 UNICODE_GLYPHS = {
@@ -126,6 +122,30 @@ COMMENT_TARGET_STATES = ('open', 'superseded')
 COMMENT_STATE_PRIORITY = {
     'open': 0,
     'superseded': 1,
+}
+CHANGED_BG_THEME_KEYS = {
+    'added': 'diff_added_bg',
+    'deleted': 'diff_deleted_bg',
+}
+COMMENT_TARGET_BG_THEME_KEYS = {
+    'open': 'comment_open_bg',
+    'superseded': 'comment_superseded_bg',
+}
+COMMENT_STATE_THEME_KEYS = {
+    'open': 'comment_open_fg',
+    'superseded': 'comment_superseded_fg',
+    'resolved': 'resolved_fg',
+    'dismissed': 'dismissed_fg',
+}
+CURSES_COLOR_NAMES = {
+    'black': 'COLOR_BLACK',
+    'red': 'COLOR_RED',
+    'green': 'COLOR_GREEN',
+    'yellow': 'COLOR_YELLOW',
+    'blue': 'COLOR_BLUE',
+    'magenta': 'COLOR_MAGENTA',
+    'cyan': 'COLOR_CYAN',
+    'white': 'COLOR_WHITE',
 }
 
 
@@ -765,6 +785,7 @@ class ReviewApp:
         self.pending_key = None
         self.last_reload_time = 0.0
         self.file_times = {}
+        self.theme = load_theme()
         self.reload()
 
     def reload(self, target_anchor=None, target_scroll=None):
@@ -885,19 +906,21 @@ class ReviewApp:
             return
         curses.start_color()
         curses.use_default_colors()
-        curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_WHITE)
-        curses.init_pair(2, curses.COLOR_GREEN, -1)
-        curses.init_pair(3, curses.COLOR_RED, -1)
-        curses.init_pair(4, curses.COLOR_CYAN, -1)
-        curses.init_pair(5, curses.COLOR_YELLOW, -1)
-        curses.init_pair(6, curses.COLOR_BLACK, curses.COLOR_WHITE)
-        curses.init_pair(7, curses.COLOR_BLACK, curses.COLOR_YELLOW)
-        curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_CYAN)
-        self.init_color_pair(curses, 9, curses.COLOR_CYAN, -1)
-        self.init_color_pair(curses, 10, curses.COLOR_YELLOW, -1)
-        self.init_color_pair(curses, 11, curses.COLOR_MAGENTA if curses.COLORS > 7 else curses.COLOR_CYAN, -1)
-        self.init_color_pair(curses, 12, curses.COLOR_BLUE, -1)
-        self.init_color_pair(curses, 13, curses.COLOR_WHITE, -1)
+        curses.init_pair(1, self.theme_color(curses, 'status_fg'), self.theme_color(curses, 'status_bg'))
+        curses.init_pair(2, self.theme_color(curses, 'added_fg'), -1)
+        curses.init_pair(3, self.theme_color(curses, 'deleted_fg'), -1)
+        curses.init_pair(4, self.theme_color(curses, 'hunk_fg'), -1)
+        curses.init_pair(5, self.theme_color(curses, 'comment_open_fg'), -1)
+        curses.init_pair(6, self.theme_color(curses, 'header_fg'), self.theme_color(curses, 'header_bg'))
+        curses.init_pair(7, self.theme_color(curses, 'header_active_fg'), self.theme_color(curses, 'header_active_bg'))
+        curses.init_pair(8, self.theme_color(curses, 'visual_fg'), self.theme_color(curses, 'visual_bg'))
+        self.init_color_pair(curses, 9, self.theme_color(curses, 'syntax_keyword_fg'), -1)
+        self.init_color_pair(curses, 10, self.theme_color(curses, 'syntax_string_fg'), -1)
+        self.init_color_pair(curses, 11, self.theme_color(curses, 'syntax_number_fg'), -1)
+        self.init_color_pair(curses, 12, self.theme_color(curses, 'syntax_function_fg'), -1)
+        self.init_color_pair(curses, 13, self.theme_color(curses, 'syntax_variable_fg'), -1)
+        self.init_comment_state_color_pairs(curses)
+        self.init_plain_syntax_color_pairs(curses)
         self.changed_line_backgrounds = self.changed_line_backgrounds_supported(curses)
         if self.changed_line_backgrounds:
             self.init_changed_color_pairs(curses)
@@ -913,6 +936,28 @@ class ReviewApp:
         except Exception:
             pass
 
+    def active_theme(self):
+        return getattr(self, 'theme', default_theme())
+
+    def theme_color(self, curses, key):
+        custom = CUSTOM_COLOR_IDS[key]
+        if self.custom_colors_supported(curses, custom):
+            red, green, blue = hex_to_curses_rgb(self.active_theme()[key])
+            try:
+                curses.init_color(custom, red, green, blue)
+                return custom
+            except Exception:
+                pass
+        if getattr(curses, 'COLORS', 0) >= 256:
+            return hex_to_xterm_256(self.active_theme()[key])
+        return self.fallback_curses_color(curses, key)
+
+    def fallback_curses_color(self, curses, key):
+        name = FALLBACK_COLOR_NAMES[key]
+        if name == 'magenta' and getattr(curses, 'COLORS', 0) <= 7:
+            name = 'cyan'
+        return getattr(curses, CURSES_COLOR_NAMES[name])
+
     def init_changed_color_pairs(self, curses):
         for row_kind in CHANGED_BG_PAIRS:
             background = self.changed_background_color(curses, row_kind)
@@ -926,6 +971,18 @@ class ReviewApp:
             background = self.comment_target_background_color(curses, state)
             self.init_color_pair(curses, COMMENT_TARGET_BG_PAIRS[state], curses.COLOR_WHITE, background)
 
+    def init_comment_state_color_pairs(self, curses):
+        for state, pair in COMMENT_STATE_FG_PAIRS.items():
+            self.init_color_pair(curses, pair, self.theme_color(curses, COMMENT_STATE_THEME_KEYS[state]), -1)
+
+    def init_plain_syntax_color_pairs(self, curses):
+        initialized = set()
+        for kind, pair in SYNTAX_PLAIN_PAIRS.items():
+            if pair in initialized:
+                continue
+            initialized.add(pair)
+            self.init_color_pair(curses, pair, self.syntax_foreground(curses, kind), -1)
+
     def init_current_line_color_pair(self, curses):
         background = self.current_line_background_color(curses)
         self.init_color_pair(curses, CURRENT_LINE_BG_PAIR, curses.COLOR_WHITE, background)
@@ -937,38 +994,50 @@ class ReviewApp:
         return getattr(curses, 'COLORS', 0) >= 256
 
     def changed_background_color(self, curses, row_kind):
-        custom = CUSTOM_CHANGED_BG_COLORS[row_kind]
+        key = CHANGED_BG_THEME_KEYS[row_kind]
+        custom = CUSTOM_COLOR_IDS[key]
         if self.custom_changed_backgrounds_supported(curses, custom):
-            red, green, blue = CUSTOM_CHANGED_BG_RGB[row_kind]
+            red, green, blue = hex_to_curses_rgb(self.active_theme()[key])
             try:
                 curses.init_color(custom, red, green, blue)
                 return custom
             except Exception:
                 pass
+        if getattr(curses, 'COLORS', 0) >= 256:
+            return hex_to_xterm_256(self.active_theme()[key], preserve_hue=True)
         return CHANGED_BG_COLORS[row_kind]
 
     def comment_target_background_color(self, curses, state):
-        custom = CUSTOM_COMMENT_TARGET_BG_COLORS[state]
+        key = COMMENT_TARGET_BG_THEME_KEYS[state]
+        custom = CUSTOM_COLOR_IDS[key]
         if self.custom_changed_backgrounds_supported(curses, custom):
-            red, green, blue = CUSTOM_COMMENT_TARGET_BG_RGB[state]
+            red, green, blue = hex_to_curses_rgb(self.active_theme()[key])
             try:
                 curses.init_color(custom, red, green, blue)
                 return custom
             except Exception:
                 pass
+        if getattr(curses, 'COLORS', 0) >= 256:
+            return hex_to_xterm_256(self.active_theme()[key], preserve_hue=True)
         return COMMENT_TARGET_BG_COLORS[state]
 
     def current_line_background_color(self, curses):
-        if self.custom_changed_backgrounds_supported(curses, CUSTOM_CURRENT_LINE_BG_COLOR):
-            red, green, blue = CUSTOM_CURRENT_LINE_BG_RGB
+        custom = CUSTOM_COLOR_IDS['current_line_bg']
+        if self.custom_changed_backgrounds_supported(curses, custom):
+            red, green, blue = hex_to_curses_rgb(self.active_theme()['current_line_bg'])
             try:
-                curses.init_color(CUSTOM_CURRENT_LINE_BG_COLOR, red, green, blue)
-                return CUSTOM_CURRENT_LINE_BG_COLOR
+                curses.init_color(custom, red, green, blue)
+                return custom
             except Exception:
                 pass
+        if getattr(curses, 'COLORS', 0) >= 256:
+            return hex_to_xterm_256(self.active_theme()['current_line_bg'])
         return CURRENT_LINE_BG_COLOR
 
     def custom_changed_backgrounds_supported(self, curses, color):
+        return self.custom_colors_supported(curses, color)
+
+    def custom_colors_supported(self, curses, color):
         try:
             can_change = curses.can_change_color()
         except Exception:
@@ -1675,22 +1744,22 @@ class ReviewApp:
 
     def comment_state_attr(self, curses, state):
         if state == 'open':
-            return curses.color_pair(5) | curses.A_BOLD
+            return curses.color_pair(COMMENT_STATE_FG_PAIRS['open']) | curses.A_BOLD
         if state == 'superseded':
-            return curses.color_pair(4)
+            return curses.color_pair(COMMENT_STATE_FG_PAIRS['superseded'])
         if state == 'resolved':
-            return curses.color_pair(2)
+            return curses.color_pair(COMMENT_STATE_FG_PAIRS['resolved'])
         if state == 'dismissed':
-            return curses.color_pair(3)
+            return curses.color_pair(COMMENT_STATE_FG_PAIRS['dismissed'])
         return curses.A_NORMAL
 
     def comment_target_state_attr(self, curses, state):
         if getattr(self, 'changed_line_backgrounds', False):
             return curses.color_pair(COMMENT_TARGET_BG_PAIRS[state])
         if state == 'open':
-            return curses.color_pair(5)
+            return curses.color_pair(COMMENT_STATE_FG_PAIRS['open'])
         if state == 'superseded':
-            return curses.color_pair(4)
+            return curses.color_pair(COMMENT_STATE_FG_PAIRS['superseded'])
         return curses.A_NORMAL
 
     def line_attr(self, curses, row):
@@ -1785,15 +1854,15 @@ class ReviewApp:
         if kind in ('function', 'class', 'decorator'):
             return curses.color_pair(12) | curses.A_BOLD
         if kind in ('builtin', 'constant'):
-            return curses.color_pair(11) | curses.A_BOLD
+            return curses.color_pair(SYNTAX_PLAIN_PAIRS['builtin']) | curses.A_BOLD
         if kind in ('namespace', 'attribute'):
             return curses.color_pair(9)
         if kind == 'variable':
             return curses.color_pair(13)
         if kind in ('operator', 'punctuation'):
-            return curses.color_pair(13) | curses.A_BOLD
+            return curses.color_pair(SYNTAX_PLAIN_PAIRS['operator']) | curses.A_BOLD
         if kind == 'generic':
-            return curses.color_pair(4)
+            return curses.color_pair(SYNTAX_PLAIN_PAIRS['generic'])
         return base_attr
 
     def changed_row_kind_for_attr(self, curses, attr):
@@ -1807,22 +1876,28 @@ class ReviewApp:
 
     def syntax_foreground(self, curses, kind):
         if kind == 'comment':
-            return curses.COLOR_WHITE
+            return self.theme_color(curses, 'syntax_comment_fg')
         if kind == 'error':
-            return curses.COLOR_RED
+            return self.theme_color(curses, 'syntax_error_fg')
         if kind == 'keyword':
-            return curses.COLOR_CYAN
+            return self.theme_color(curses, 'syntax_keyword_fg')
         if kind == 'string':
-            return curses.COLOR_YELLOW
-        if kind in ('number', 'literal', 'builtin', 'constant'):
-            return curses.COLOR_MAGENTA if curses.COLORS > 7 else curses.COLOR_CYAN
+            return self.theme_color(curses, 'syntax_string_fg')
+        if kind in ('number', 'literal'):
+            return self.theme_color(curses, 'syntax_number_fg')
+        if kind in ('builtin', 'constant'):
+            return self.theme_color(curses, 'syntax_builtin_fg')
         if kind in ('function', 'class', 'decorator'):
-            return curses.COLOR_BLUE
+            return self.theme_color(curses, 'syntax_function_fg')
         if kind in ('namespace', 'attribute', 'generic'):
-            return curses.COLOR_CYAN
+            if kind == 'generic':
+                return self.theme_color(curses, 'syntax_generic_fg')
+            return self.theme_color(curses, 'syntax_namespace_fg')
         if kind in ('variable', 'operator', 'punctuation'):
-            return curses.COLOR_WHITE
-        return curses.COLOR_WHITE
+            if kind in ('operator', 'punctuation'):
+                return self.theme_color(curses, 'syntax_operator_fg')
+            return self.theme_color(curses, 'syntax_variable_fg')
+        return self.theme_color(curses, 'syntax_variable_fg')
 
     def addstr(self, screen, y, x, value, attr=0):
         try:

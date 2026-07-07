@@ -313,10 +313,17 @@ class CliTest(unittest.TestCase):
         color = app.current_line_background_color(curses)
 
         self.assertEqual(color, 104)
-        self.assertEqual(curses.color_changes, [(104, 34, 34, 34)])
+        self.assertEqual(curses.color_changes, [(104, 35, 35, 35)])
 
     def test_current_line_background_color_falls_back_without_custom_palette(self):
         app = ReviewApp.__new__(ReviewApp)
+
+        self.assertEqual(app.current_line_background_color(LowColorCurses()), 236)
+
+    def test_current_line_background_color_uses_nearest_fixed_palette_color(self):
+        app = ReviewApp.__new__(ReviewApp)
+        app.theme = tui.default_theme()
+        app.theme['current_line_bg'] = '#152b43'
 
         self.assertEqual(app.current_line_background_color(FixedPaletteCurses()), 236)
 
@@ -344,9 +351,9 @@ class CliTest(unittest.TestCase):
 
         states = {
             'open': curses.color_pair(5) | curses.A_BOLD,
-            'superseded': curses.color_pair(4),
-            'resolved': curses.color_pair(2),
-            'dismissed': curses.color_pair(3),
+            'superseded': curses.color_pair(tui.COMMENT_STATE_FG_PAIRS['superseded']),
+            'resolved': curses.color_pair(tui.COMMENT_STATE_FG_PAIRS['resolved']),
+            'dismissed': curses.color_pair(tui.COMMENT_STATE_FG_PAIRS['dismissed']),
         }
         for state, attr in states.items():
             row = RenderedLine('comment', None, 'LRV-001', kind='comment_body', comment_state=state)
@@ -418,7 +425,7 @@ class CliTest(unittest.TestCase):
         curses = DummyCurses()
 
         self.assertEqual(app.line_attr(curses, RenderedLine('    4 code', None, kind='unchanged', target_comment_state='open')), curses.color_pair(5))
-        self.assertEqual(app.line_attr(curses, RenderedLine('    4 code', None, kind='unchanged', target_comment_state='superseded')), curses.color_pair(4))
+        self.assertEqual(app.line_attr(curses, RenderedLine('    4 code', None, kind='unchanged', target_comment_state='superseded')), curses.color_pair(tui.COMMENT_STATE_FG_PAIRS['superseded']))
 
     def test_comment_target_attr_overrides_changed_line_backgrounds(self):
         app = ReviewApp.__new__(ReviewApp)
@@ -443,12 +450,33 @@ class CliTest(unittest.TestCase):
         color = app.changed_background_color(curses, 'added')
 
         self.assertEqual(color, 100)
-        self.assertEqual(curses.color_changes, [(100, 18, 55, 34)])
+        self.assertEqual(curses.color_changes, [(100, 20, 55, 35)])
 
     def test_changed_background_color_falls_back_without_custom_palette(self):
         app = ReviewApp.__new__(ReviewApp)
 
+        self.assertEqual(app.changed_background_color(LowColorCurses(), 'added'), 22)
+
+    def test_changed_background_color_uses_nearest_fixed_palette_color(self):
+        app = ReviewApp.__new__(ReviewApp)
+        app.theme = tui.default_theme()
+        app.theme['diff_added_bg'] = '#123f2a'
+
         self.assertEqual(app.changed_background_color(FixedPaletteCurses(), 'added'), 22)
+
+    def test_changed_color_pairs_keep_backgrounds_with_syntax_foregrounds(self):
+        app = ReviewApp.__new__(ReviewApp)
+        app.theme = tui.default_theme()
+        curses = DummyCurses()
+        curses.pairs = []
+        curses.color_changes = []
+
+        app.init_changed_color_pairs(curses)
+
+        self.assertIn((tui.CHANGED_BG_PAIRS['added'], curses.COLOR_WHITE, 100), curses.pairs)
+        self.assertIn((tui.CHANGED_BG_PAIRS['deleted'], curses.COLOR_WHITE, 101), curses.pairs)
+        self.assertIn((tui.CHANGED_SYNTAX_PAIRS['added']['string'], tui.CUSTOM_COLOR_IDS['syntax_string_fg'], 100), curses.pairs)
+        self.assertIn((tui.CHANGED_SYNTAX_PAIRS['deleted']['string'], tui.CUSTOM_COLOR_IDS['syntax_string_fg'], 101), curses.pairs)
 
     def test_comment_target_background_color_uses_muted_custom_color_when_supported(self):
         app = ReviewApp.__new__(ReviewApp)
@@ -458,12 +486,19 @@ class CliTest(unittest.TestCase):
         color = app.comment_target_background_color(curses, 'open')
 
         self.assertEqual(color, 102)
-        self.assertEqual(curses.color_changes, [(102, 72, 62, 16)])
+        self.assertEqual(curses.color_changes, [(102, 71, 63, 16)])
 
     def test_comment_target_background_color_falls_back_without_custom_palette(self):
         app = ReviewApp.__new__(ReviewApp)
 
-        self.assertEqual(app.comment_target_background_color(FixedPaletteCurses(), 'superseded'), 24)
+        self.assertEqual(app.comment_target_background_color(LowColorCurses(), 'superseded'), 24)
+
+    def test_comment_target_background_color_uses_nearest_fixed_palette_color(self):
+        app = ReviewApp.__new__(ReviewApp)
+        app.theme = tui.default_theme()
+        app.theme['comment_open_bg'] = '#101f35'
+
+        self.assertEqual(app.comment_target_background_color(FixedPaletteCurses(), 'open'), 17)
 
     def test_syntax_token_kind_maps_common_pygments_tokens(self):
         if tui.Name is None:

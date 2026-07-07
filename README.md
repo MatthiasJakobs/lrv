@@ -47,6 +47,60 @@ Without `pygments`, the TUI falls back to the plain black-and-white/diff-color r
 
 On macOS, `pipx` avoids installing into the externally managed system or Homebrew Python environment. If `pipx` is not installed, use `brew install pipx` and then `pipx ensurepath`.
 
+## Theme
+
+`lrv` loads an optional user theme from:
+
+```text
+${XDG_CONFIG_HOME}/lrv/theme.yaml
+```
+
+If `XDG_CONFIG_HOME` is not set, it falls back to:
+
+```text
+~/.config/lrv/theme.yaml
+```
+
+Theme values are flat semantic keys with HTML hex colors:
+
+```yaml
+added_fg: '#00aa00'
+deleted_fg: '#aa0000'
+hunk_fg: '#00aaaa'
+comment_open_fg: '#aaaa00'
+comment_superseded_fg: '#00aaaa'
+resolved_fg: '#00aa00'
+dismissed_fg: '#aa0000'
+visual_fg: '#000000'
+visual_bg: '#00aaaa'
+status_fg: '#000000'
+status_bg: '#ffffff'
+status_active_fg: '#000000'
+status_active_bg: '#aaaa00'
+header_fg: '#000000'
+header_bg: '#ffffff'
+header_active_fg: '#000000'
+header_active_bg: '#aaaa00'
+diff_added_bg: '#050e09'
+diff_deleted_bg: '#120706'
+comment_open_bg: '#121004'
+comment_superseded_bg: '#040d11'
+current_line_bg: '#090909'
+syntax_keyword_fg: '#00aaaa'
+syntax_string_fg: '#aaaa00'
+syntax_number_fg: '#aa00aa'
+syntax_function_fg: '#0000aa'
+syntax_builtin_fg: '#aa00aa'
+syntax_namespace_fg: '#00aaaa'
+syntax_variable_fg: '#ffffff'
+syntax_operator_fg: '#ffffff'
+syntax_generic_fg: '#00aaaa'
+syntax_error_fg: '#aa0000'
+syntax_comment_fg: '#ffffff'
+```
+
+Missing files, malformed YAML, unknown keys, and invalid color values are ignored. Valid keys are merged over the built-in theme.
+
 To install the bundled agent skill, copy the skill directory to your agent's user skills directory:
 
 ```sh

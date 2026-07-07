@@ -3,6 +3,7 @@ name = "lrv"
 version = "0.1.0"
 description = "Local review tool for coding-agent changes."
 requires-python = ">=3.11"
+dependencies = ['PyYAML']
 
 [project.optional-dependencies]
 highlight = ['pygments']
