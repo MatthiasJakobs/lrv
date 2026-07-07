@@ -639,6 +639,63 @@ class CliTest(unittest.TestCase):
             self.assertEqual(app.selected, 1)
             self.assertEqual(app.diff_line, 3)
 
+    def test_tui_brackets_jump_between_comments_in_selected_file(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            self.add_parser_comment(repo, 'Keep this second parser note reachable.')
+            app = ReviewApp(repo, load_state(repo))
+            curses = DummyCurses()
+
+            self.select_file(app, 'src/parser.py')
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            first_comment = next(index for index, row in enumerate(rows) if row.kind == 'comment_title' and row.comment_id == 'LRV-001')
+            second_comment = next(index for index, row in enumerate(rows) if row.kind == 'comment_title' and row.comment_id == 'LRV-005')
+
+            app.diff_line = 0
+            app.handle_normal_key(ord(']'), curses)
+            self.assertEqual(app.diff_line, first_comment)
+
+            app.handle_normal_key(ord(']'), curses)
+            self.assertEqual(app.diff_line, second_comment)
+
+            app.handle_normal_key(ord('['), curses)
+            self.assertEqual(app.diff_line, first_comment)
+
+    def test_tui_brackets_do_nothing_without_comments_in_selected_file(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            curses = DummyCurses()
+
+            self.select_file(app, 'src/reports.py')
+            app.focus = 'diff'
+            app.diff_line = 2
+
+            app.handle_normal_key(ord(']'), curses)
+            self.assertEqual(app.diff_line, 2)
+            app.handle_normal_key(ord('['), curses)
+            self.assertEqual(app.diff_line, 2)
+
+    def test_tui_brackets_ignore_file_focus(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            curses = DummyCurses()
+
+            self.select_file(app, 'src/parser.py')
+            app.focus = 'files'
+            app.diff_line = 3
+
+            app.handle_normal_key(ord(']'), curses)
+            app.handle_normal_key(ord('['), curses)
+
+            self.assertEqual(app.focus, 'files')
+            self.assertEqual(app.diff_line, 3)
+
     def test_tui_diff_progress_label_matches_selected_line(self):
         with tempfile.TemporaryDirectory() as temp:
             repo = Path(temp) / 'repo'

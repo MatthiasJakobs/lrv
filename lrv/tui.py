@@ -891,6 +891,10 @@ class ReviewApp:
             self.focus = 'diff'
         elif key == ord('G'):
             self.last_diff_line()
+        elif key == ord(']'):
+            self.jump_comment(1)
+        elif key == ord('['):
+            self.jump_comment(-1)
         elif key == ord('o'):
             self.start_input(1, curses)
         elif key == ord('O'):
@@ -1105,6 +1109,20 @@ class ReviewApp:
         if not lines:
             return
         self.diff_line = len(lines) - 1
+
+    def jump_comment(self, direction):
+        if self.focus != 'diff':
+            return
+        rows = self.selected_file_rows()
+        indexes = [index for index, row in enumerate(rows) if row.kind == 'comment_title']
+        if not indexes:
+            return
+        if direction > 0:
+            candidates = [index for index in indexes if index > self.diff_line]
+        else:
+            candidates = [index for index in indexes if index < self.diff_line]
+        if candidates:
+            self.diff_line = candidates[0] if direction > 0 else candidates[-1]
 
     def start_visual(self):
         if not self.files:
