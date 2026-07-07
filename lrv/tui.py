@@ -1,7 +1,9 @@
 import hashlib
 import math
+import os
 import re
 import sys
+import time
 
 from lrv.git import ChangedFile, changed_files, file_diff, file_lines, head_revision
 from lrv.state import FileAnchor, HunkSnapshot, ReviewState, append_comment, load_state, mark_comments_superseded, remove_comment, save_state, set_comment_state, update_comment_body, update_comment_line_range
@@ -23,6 +25,7 @@ SOURCE_ROW_RE = re.compile(r'^([ +-] *\d+ )')
 CTRL_D = 4
 CTRL_U = 21
 FILE_ANCHOR_CONTEXT = 3
+HOT_RELOAD_INTERVAL = 1.0  # seconds between automatic reloads
 CHANGED_BG_PAIRS = {
     'added': 14,
     'deleted': 15,
@@ -643,6 +646,8 @@ class ReviewApp:
         self.changed_line_backgrounds = False
         self.change_counts = {}
         self.pending_key = None
+        self.last_reload_time = 0.0
+        self.file_times = {}
         self.reload()
 
     def reload(self, target_anchor=None, target_scroll=None):
@@ -651,6 +656,7 @@ class ReviewApp:
         self.state = refresh_superseded_comments(self.repo, self.state)
         self.files = review_files(self.repo, self.state)
         self.change_counts = {file.path: file_change_counts(self.repo, file) for file in self.files}
+        self.file_times = {file.path: self._file_mtime(file) for file in self.files}
         if selected_path is not None:
             for index, file in enumerate(self.files):
                 if file.path == selected_path:
@@ -667,16 +673,36 @@ class ReviewApp:
         else:
             self.diff_line = self.anchor_row_index(target_anchor)
 
+    def _file_mtime(self, file):
+        try:
+            return os.path.getmtime(self.repo / file.path)
+        except OSError:
+            return None
+
+    def files_changed(self):
+        current = {file.path: self._file_mtime(file) for file in self.files}
+        if set(current.keys()) != set(self.file_times.keys()):
+            return True
+        return any(current[path] != self.file_times[path] for path in current)
+
     def run(self, screen):
         import curses
 
         self.set_cursor(curses, 0)
         screen.keypad(True)
+        curses.halfdelay(10)  # 1/10 second blocking timeout for polling
         self.init_colors(curses)
+        self.last_reload_time = time.time()
 
         while True:
             self.draw(screen, curses)
             key = screen.getch()
+            if key == -1:
+                if time.time() - self.last_reload_time >= HOT_RELOAD_INTERVAL:
+                    self.last_reload_time = time.time()
+                    if self.files_changed():
+                        self.reload()
+                continue
             if self.mode == 'input':
                 self.handle_input_key(key, curses)
                 continue
