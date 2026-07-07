@@ -1296,6 +1296,8 @@ class ReviewApp:
             self.transition_selected_modal_comment('resolved')
         elif key == ord('x'):
             self.transition_selected_modal_comment('dismissed')
+        elif key == ord('d'):
+            self.delete_selected_modal_comment()
 
     def transition_selected_modal_comment(self, comment_state):
         comment = self.selected_modal_comment()
@@ -1313,6 +1315,17 @@ class ReviewApp:
         self.state = set_comment_state(self.state, comment.id, comment_state)
         save_state(self.repo, self.state)
         return True
+
+    def delete_selected_modal_comment(self):
+        comment = self.selected_modal_comment()
+        if comment is None:
+            return
+        self.state = remove_comment(self.state, comment.id)
+        save_state(self.repo, self.state)
+        self.modal_comment_ids = tuple(id for id in self.modal_comment_ids if id != comment.id)
+        self.modal_original_states.pop(comment.id, None)
+        comments = self.modal_comments()
+        self.modal_index = max(0, min(len(comments) - 1, self.modal_index))
 
     def jump_to_modal_comment(self):
         comment = self.selected_modal_comment()
@@ -1717,7 +1730,7 @@ class ReviewApp:
         bottom = y + modal_height - 1
         right = x + modal_width - 1
 
-        title = 'Comments  enter jump  r resolve  x dismiss  esc close'
+        title = 'Comments  enter jump  r resolve  x dismiss  d delete  q close'
         self.addstr(screen, y, x, '+' + '-' * (modal_width - 2) + '+', curses.A_BOLD)
         self.addstr(screen, y + 1, x, '|', curses.A_BOLD)
         self.addstr(screen, y + 1, x + 2, title[:modal_width - 4], curses.A_BOLD)

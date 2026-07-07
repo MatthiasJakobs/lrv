@@ -716,6 +716,34 @@ class CliTest(unittest.TestCase):
             self.assertEqual(app.files[app.selected].path, 'src/receipts.py')
             self.assertEqual(app.selected_file_rows()[app.diff_line].comment_id, 'LRV-003')
 
+    def test_tui_comment_modal_d_deletes_selected_comment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            app.open_comment_modal()
+            app.modal_index = 1
+
+            app.handle_modal_key(ord('d'), DummyCurses())
+
+            self.assertEqual(app.modal_comment_ids, ('LRV-001', 'LRV-003'))
+            self.assertEqual(app.modal_index, 1)
+            self.assertNotIn('LRV-002', self.comments_by_id(repo))
+
+    def test_tui_comment_modal_header_shows_q_close(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            app.open_comment_modal()
+            screen = FakeScreen()
+
+            app.draw_comment_modal(screen, 24, 100, DummyCurses())
+
+            rendered = '\n'.join(call[2] for call in screen.calls)
+            self.assertIn('q close', rendered)
+            self.assertNotIn('esc close', rendered)
+
     def test_tui_file_focus_still_moves_between_files(self):
         with tempfile.TemporaryDirectory() as temp:
             repo = Path(temp) / 'repo'
