@@ -1,3 +1,5 @@
+![lrv review comment example](example.png)
+
 # lrv
 
 `lrv` is a local review tool for coding-agent changes. It lets a human review the current Git working tree, attach comments to diff lines, and expose those comments through a CLI so an agent can address them without creating a remote branch or GitHub pull request.
