@@ -863,8 +863,12 @@ class ReviewApp:
             self.pending_key = key
         elif key in (ord('q'), 27):
             return True
-        elif key in (ord('r'),):
+        elif key == ord('r'):
+            self.transition_selected_inline_comment('resolved')
+        elif key == ord('R'):
             self.reload()
+        elif key == ord('x'):
+            self.transition_selected_inline_comment('dismissed')
         elif key in (ord('\t'),):
             self.toggle_focus()
         elif key in (curses.KEY_UP, ord('k')):
@@ -1301,6 +1305,14 @@ class ReviewApp:
         next_state = original_state if comment.state == comment_state else comment_state
         self.state = set_comment_state(self.state, comment.id, next_state)
         save_state(self.repo, self.state)
+
+    def transition_selected_inline_comment(self, comment_state):
+        comment = self.selected_inline_comment()
+        if comment is None:
+            return False
+        self.state = set_comment_state(self.state, comment.id, comment_state)
+        save_state(self.repo, self.state)
+        return True
 
     def jump_to_modal_comment(self):
         comment = self.selected_modal_comment()

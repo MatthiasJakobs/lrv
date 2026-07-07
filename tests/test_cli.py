@@ -1211,6 +1211,45 @@ class CliTest(unittest.TestCase):
             self.assertNotIn('LRV-001', [comment.id for comment in state.comments])
             self.assertIn('LRV-002', [comment.id for comment in state.comments])
 
+    def test_tui_r_resolves_selected_inline_comment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            self.select_file(app, 'src/parser.py')
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = next(index for index, row in enumerate(rows) if row.text.startswith('>>> LRV-001 '))
+
+            app.handle_normal_key(ord('r'), DummyCurses())
+
+            self.assertEqual(self.comments_by_id(repo)['LRV-001'].state, 'resolved')
+
+    def test_tui_shift_r_reloads(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            save_state(repo, ReviewState(version=1, repo_root=str(repo), base_commit='', comments=()))
+
+            app.handle_normal_key(ord('R'), DummyCurses())
+
+            self.assertEqual(app.state.comments, ())
+
+    def test_tui_x_dismisses_selected_inline_comment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / 'repo'
+            materialize('python-review-basic', repo)
+            app = ReviewApp(repo, load_state(repo))
+            self.select_file(app, 'src/parser.py')
+            app.focus = 'diff'
+            rows = app.selected_file_rows()
+            app.diff_line = next(index for index, row in enumerate(rows) if row.text.startswith('>>> LRV-001 '))
+
+            app.handle_normal_key(ord('x'), DummyCurses())
+
+            self.assertEqual(self.comments_by_id(repo)['LRV-001'].state, 'dismissed')
+
     def test_tui_refresh_marks_comment_superseded_when_commented_hunk_changes(self):
         with tempfile.TemporaryDirectory() as temp:
             repo = Path(temp) / 'repo'
